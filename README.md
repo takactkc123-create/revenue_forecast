@@ -15,15 +15,15 @@
 ```bash
 # 実データがある場合（03から開始）
 uv run python 03_feature_eng.py
-uv run python 04_model_train.py
+uv run python 04_model_train.py --retrain-all   # walk-forward検証 + 全年再学習
 uv run python 05_predict_2026.py
 uv run python 06_trend_correction.py
 uv run python 07_visualize.py
 
-# ダミーデータで試す場合（02から開始）
-uv run python 02_generate_dummy.py
+# ダミーデータで試す場合（01から開始）
+uv run python 01_generate_dummy.py
 uv run python 03_feature_eng.py
-uv run python 04_model_train.py
+uv run python 04_model_train.py --retrain-all
 uv run python 05_predict_2026.py
 uv run python 06_trend_correction.py
 uv run python 07_visualize.py
@@ -38,7 +38,8 @@ uv run python 07_visualize.py
 ├── config.py                  # 全設定値の一元管理（ここだけ触ればパラメータ調整可能）
 ├── tax_reform.py              # 税制改正補正ロジック（共通モジュール）
 │
-├── 02_generate_dummy.py       # ダミーデータ生成
+├── 01_generate_dummy.py       # ダミーデータ生成
+├── 02_datacheck.py            # データチェック
 ├── 03_feature_eng.py          # 特徴量エンジニアリング
 ├── 04_model_train.py          # モデル学習・精度検証
 ├── 05_predict_2026.py         # 翌年度予測
@@ -46,23 +47,27 @@ uv run python 07_visualize.py
 ├── 07_visualize.py            # グラフ出力
 │
 ├── data/
-│   ├── individual_raw.csv         # 入力データ（実データ or ダミー）
-│   ├── individual_prepared.csv    # 特徴量追加済みデータ
-│   ├── tax_reform_config.csv      # 税制改正補正ルール
-│   ├── yearly_result.csv          # 年度別合算精度
-│   ├── val_result.csv             # 個人別検証結果
-│   ├── prediction_2026.csv        # 個人別予測値
-│   └── prediction_adjusted_2026.csv  # 補正後予測値
+│   ├── individual_raw.csv              # 入力データ（実データ or ダミー）
+│   ├── individual_prepared.csv         # 特徴量追加済みデータ
+│   ├── tax_reform_config.csv           # 税制改正補正ルール
+│   ├── yearly_result.csv               # 年度別合算精度
+│   ├── val_result.csv                  # 個人別検証結果
+│   ├── walkforward_result_04.csv       # walk-forward各フォールドの精度（--walkforward/--retrain-all時のみ）
+│   ├── prediction_2026.csv             # 個人別予測値
+│   └── prediction_adjusted_2026.csv    # 補正後予測値
 │
 ├── models/
 │   ├── lgbm_model.txt         # 学習済みモデル
-│   └── model_config.csv       # 特徴量・パラメータ記録
+│   └── model_config.csv       # 特徴量・パラメータ・検証モード記録
 │
 └── results/
-    ├── fig1_yearly_accuracy.png     # 年度別合算精度グラフ
-    ├── fig2_error_distribution.png  # 個人税額誤差分布
-    ├── fig3_age_breakdown_2026.png  # 年齢区分別税額
-    └── fig4_summary_2026.png        # 予測サマリー
+    ├── fig1_yearly_accuracy.png          # 年度別合算精度グラフ
+    ├── fig2_error_distribution.png       # 個人税額誤差分布
+    ├── fig3_age_breakdown_2026.png       # 年齢区分別税額
+    ├── fig4_summary_2026.png             # 予測サマリー
+    ├── fig5_metrics_dashboard.png        # 評価指標テーブル＋年度別誤差率棒グラフ
+    ├── fig6_tax_timeseries_2026.png      # 税収実績推移＋予測・信頼区間の時系列グラフ
+    └── fig7_walkforward_report.png       # walk-forward検証レポート（--walkforward/--retrain-all時のみ）
 ```
 
 ---
@@ -89,7 +94,7 @@ uv run python 07_visualize.py
 
 | ステップ | スクリプト | 入力 | 出力 |
 |---:|---|---|---|
-| 0 | `02_generate_dummy.py` | `config.py` の設定値 | `data/individual_raw.csv` |
+| 0 | `01_generate_dummy.py` | `config.py` の設定値 | `data/individual_raw.csv` |
 | 1〜5 | パターンAと同じ | — | — |
 
 ---
@@ -109,10 +114,12 @@ uv run python 07_visualize.py
 | 人口増減 | `POPULATION_GROWTH_RATES` | 年度別人口規模を変えたいとき |
 | 男女比 | `GENDER_RATIO` | 対象自治体の実態に合わせるとき |
 | 年齢構成 | `AGE_GROUPS`, `AGE_WEIGHTS` | 対象自治体の実態に合わせるとき |
+| 賃金上昇率 | `APPLY_WAGE_GROWTH`, `SALARY_GROWTH_RATES`, `PENSION_GROWTH_RATES` | 年別の給与・年金上昇率を実績に合わせるとき |
+| 検証モード | `VALIDATION_MODE`, `WF_MIN_TRAIN_YEARS` | CLIオプション未指定時のデフォルト設定 |
 
 ---
 
-### `02_generate_dummy.py` — ダミーデータ生成
+### `01_generate_dummy.py` — ダミーデータ生成
 
 実データがない状態でもモデルの動作確認ができるよう、統計的に現実に近いダミーデータを生成する。
 
@@ -124,6 +131,7 @@ uv run python 07_visualize.py
 - **年齢構成**：総務省統計局2024年データの20歳以上人口の年齢5歳刻み比率を使用。
 - **男女比**：e-Stat（政府統計の総合窓口）より20歳以上の人口比率を参照し、女性51.7% / 男性48.3%に設定。
 - **人口推移**：`POPULATION_GROWTH_RATES`による年別の人口倍率で各年のレコード数を調整。在籍者の一定割合（`TURNOVER_RATE`）が毎年入れ替わる流入・退出モデルを採用している。
+- **賃金上昇率**：`APPLY_WAGE_GROWTH = True` のとき、給与（`SALARY_GROWTH_RATES`）と年金（`PENSION_GROWTH_RATES`）に年別の上昇率を個別適用する。在籍継続者には前年比の上昇率、新規流入者には基準年からの累積上昇率を適用する。`False` に設定すると全年一律 +0.5%/年の旧動作に戻る。
 
 **留意点**
 
@@ -161,6 +169,18 @@ uv run python 07_visualize.py
 
 住民税の計算は給与や控除の組み合わせによる非線形な計算体系であり、木ベースのアンサンブルモデルが適合しやすい。LightGBMは大量の数値列に対して高速かつ高精度で、外れ値（高額所得者）への耐性もある。
 
+**検証モード（CLIオプションで切り替え）**
+
+| オプション | 動作 | 使いどころ |
+|---|---|---|
+| `--standard`（デフォルト） | `TRAIN_YEARS` で学習 → `TEST_YEAR` で評価（1回のホールドアウト） | 動作確認・手早い精度確認 |
+| `--walkforward` | fold1〜fold4 の時系列クロスバリデーション | モデルの安定性確認・バイアス検出 |
+| `--retrain-all` | walk-forward 検証 → `TRAIN_YEARS + TEST_YEAR` 全年で再学習 | **実データ運用時の推奨フロー** |
+
+`--retrain-all` の場合、walk-forward の最終フォールド（fold4）のアウトオブサンプル予測を `val_result.csv` として使用するため、評価の公平性は保たれる。最終モデルは全年データを学習済みのため、直近年（2025年）のパターンも反映した状態で2026年を予測できる。
+
+各フォールドの精度は `data/walkforward_result_04.csv` に保存される。
+
 **評価指標**
 
 | 指標 | 意味 | 役割 |
@@ -172,14 +192,11 @@ uv run python 07_visualize.py
 
 > **WMAPEを主指標とする理由**：非課税者（税額=0円）を含む全体で集計したときの誤差率であり、自治体が管理する「税収合計」の予測精度と等価である。
 
-**時系列検証（ホールドアウト）**
-
-`TRAIN_YEARS` で学習し `TEST_YEAR` で評価するウォークフォワード形式。将来のデータを学習に使わないため、実務に近い検証になっている。
-
 **留意点**
 
 - 税制改正がある年のラベルは `tax_reform_config.csv` の `label_correction` で補正してから学習する（改正の影響を過去年に誤帰属させない）。
 - 非課税基準（地方税法第295条）以下の予測値は強制的に0円に上書きされる。
+- `year` は特徴量（FEATURE_COLS）に含まれない。木モデルは訓練範囲外の年値を外挿できないためであり、年ごとの経済動向はダミーデータの上昇率設定や実データの特徴量分布として取り込む設計になっている。
 
 ---
 
@@ -225,7 +242,10 @@ python 05_predict_2026.py --wage-rate 0.025     # 給与上昇率を直接指定
 | Fig1 | `fig1_yearly_accuracy.png` | 年度別：実測 vs 予測 折れ線 |
 | Fig2 | `fig2_error_distribution.png` | 個人税額誤差のヒストグラム |
 | Fig3 | `fig3_age_breakdown_2026.png` | 年齢区分別の合計税額・人員（棒グラフ） |
-| Fig4 | `fig4_summary_2026.png` | 補正前後の最終予測比較 |
+| Fig4 | `fig4_summary_2026.png` | 予測中央値・低い見積もり・高い見積もり（95%信頼区間）＋数値テーブル |
+| Fig5 | `fig5_metrics_dashboard.png` | WMAPE・RMSE 等の評価指標テーブル＋年度別誤差率棒グラフ |
+| Fig6 | `fig6_tax_timeseries_2026.png` | 2020〜前年度の実績推移＋予測年度の予測値・95%信頼区間を重ねた時系列グラフ |
+| Fig7 | `fig7_walkforward_report.png` | walk-forward各フォールドの精度テーブル＋誤差率棒グラフ（`--walkforward`/`--retrain-all`時のみ出力） |
 
 ---
 
@@ -278,6 +298,39 @@ POPULATION_GROWTH_RATES = {    # 年別の対基準年人口倍率
     2021: 0.999,
     ...
 }
+```
+
+### 賃金上昇率を実績値に合わせたいとき
+
+```python
+# config.py
+APPLY_WAGE_GROWTH = True   # False にすると全年一律 +0.5%/年に戻る
+
+SALARY_GROWTH_RATES = {    # 給与：厚労省「毎月勤労統計調査」等の前年比を参照
+    2020: 1.000,
+    2021: 1.018,
+    2022: 1.021,
+    2023: 1.036,
+    2024: 1.051,
+    2025: 1.057,
+}
+
+PENSION_GROWTH_RATES = {   # 年金：厚労省「年金改定率」を参照
+    2020: 1.000,
+    2021: 0.999,
+    2022: 0.996,
+    2023: 1.019,
+    2024: 1.027,
+    2025: 1.019,
+}
+```
+
+### walk-forward 検証のデフォルトモードを変えたいとき
+
+```python
+# config.py（CLIオプション未指定時のデフォルト）
+VALIDATION_MODE   = "retrain_all"   # "standard" / "walkforward" / "retrain_all"
+WF_MIN_TRAIN_YEARS = 2              # fold1 の最低訓練年数
 ```
 
 ### 税制改正に対応したいとき
