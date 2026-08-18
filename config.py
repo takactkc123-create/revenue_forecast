@@ -1,0 +1,284 @@
+"""
+config.py
+=========
+プロジェクト全体の設定値を一元管理するファイル。
+税制改正ロジック・計算式は tax_reform.py に記載。
+このファイルはパラメータ値のみ管理し、ロジックは書かない。
+
+【メンテナンス対象】
+  - 年度を更新するとき     : TRAIN_YEARS / TEST_YEAR / PREDICT_YEAR
+  - モデル調整するとき     : LGBM_PARAMS
+  - 税額控除想定を変えるとき: FURUSATO_PARAMS / HOUSING_PARAMS
+  - ダミーデータ規模を変えるとき: N_PER_YEAR
+"""
+
+# ─── 年度設定 ──────────────────────────────────────────────────────────────────
+TRAIN_YEARS  = [2020, 2021, 2022, 2023, 2024]
+TEST_YEAR    = 2025
+PREDICT_YEAR = 2026
+
+# ─── パスの共通設定 ────────────────────────────────────────────────────────────
+RAW_DATA_PATH      = "data/individual_raw.csv"
+PREPARED_DATA_PATH = "data/individual_prepared.csv"
+SUMMARY_PATH       = "data/individual_summary.csv"
+MODEL_DIR          = "models"
+MODEL_PATH         = "models/lgbm_model.txt"
+MODEL_CONFIG_PATH  = "models/model_config.csv"
+REFORM_CONFIG_PATH = "data/tax_reform_config.csv"
+
+# ─── 税額下限（住民税均等割：道府県民税1,800円 + 市町村民税3,500円 = 5,300円）──
+# 2024年度以降は森林環境税1,000円追加だが、住民税が1,000円減額し、結果的に5,300円を維持
+MIN_TAX = 5_300
+
+# ─── 住民税非課税基準（均等割・所得割とも非課税）── 地方税法第295条 ───────────
+# 自治体による寒冷地加算等は考慮しない標準値
+# 判定式:
+#   扶養なし : 合計所得 ≤ NON_TAXABLE_PER_PERSON × 1 + NON_TAXABLE_FLAT
+#              = 35万 + 10万 = 45万円
+#   扶養あり : 合計所得 ≤ NON_TAXABLE_PER_PERSON × (1+N) + NON_TAXABLE_FLAT + NON_TAXABLE_FAMILY_ADD
+#              N = 控除対象配偶者 + 扶養親族数
+NON_TAXABLE_PER_PERSON = 350_000   # 本人 + 扶養等1人あたり加算額（35万円）
+NON_TAXABLE_FLAT       = 100_000   # 固定加算額（10万円、令和3年分以降）
+NON_TAXABLE_FAMILY_ADD = 210_000   # 配偶者・扶養親族がいる場合の追加加算（21万円）
+
+# ─── LightGBM ハイパーパラメータ ──────────────────────────────────────────────
+LGBM_PARAMS = {
+    "n_estimators"     : 500,
+    "learning_rate"    : 0.05,
+    "num_leaves"       : 63,
+    "min_child_samples": 50,
+    "random_state"     : 42,
+    "n_jobs"           : -1,
+}
+
+# ─── 所得合計に含める全所得列（income_total の計算に使用。pension_gross は除く）──
+# 01_generate_dummy / 03_feature_eng / 05_predict_2026 / tax_reform で共有
+ALL_INCOME_COLS = [
+    "income_salary",        # 給与所得
+    "income_business",      # 事業所得_営業等
+    "income_farming",       # 事業所得_農業
+    "income_property",      # 不動産所得
+    "income_interest",      # 利子所得
+    "income_dividend",      # 配当所得（総合課税）
+    "income_pension",       # 雑所得_公的年金等（控除後）
+    "income_misc_business", # 雑所得_業務
+    "income_other",         # 雑所得_その他
+    "income_stcg",          # 総合短期譲渡所得
+    "income_ltcg",          # 総合長期譲渡所得
+    "income_occasional",    # 一時所得
+    "sep_stcg_general",     # 分離_短期譲渡一般
+    "sep_stcg_reduced",     # 分離_短期譲渡軽減
+    "sep_ltcg_general",     # 分離_長期譲渡一般
+    "sep_ltcg_specific",    # 分離_長期譲渡特定
+    "sep_ltcg_reduced",     # 分離_長期譲渡軽減
+    "sep_stock_general",    # 分離_一般株式譲渡
+    "sep_stock_listed",     # 分離_特定株式譲渡
+    "sep_dividend_listed",  # 分離_上場株式配当
+    "sep_futures",          # 分離_先物取引
+    "sep_forestry",         # 分離_山林
+]
+
+# ─── 特徴量列（03_feature_eng.py で生成・04_model_train.py で使用）─────────────
+# ※ 除外列: muni_kintowari / muni_tokuwari / pref_kintowari / pref_tokuwari
+#   均等割・所得割の合計 = 年税額（目的変数）のため説明変数に使うと完全なリークになる
+#   これらは03_feature_eng.pyでdrop済み
+FEATURE_COLS = [
+    # 属性
+    "gender",
+    # 収入（確定申告書第1表「収入金額等」）
+    "income_salary_gross",       # 給与収入
+    "income_pension_gross",      # 雑収入_公的年金等（公的年金等控除前）
+    # 所得（確定申告書第1表「所得金額等」）
+    "income_salary",             # 給与所得
+    "income_business",           # 事業所得_営業等
+    "income_farming",            # 事業所得_農業
+    "income_property",           # 不動産所得
+    "income_interest",           # 利子所得
+    "income_dividend",           # 配当所得（総合課税）
+    "income_pension",            # 雑所得_公的年金等（控除後）
+    "income_misc_business",      # 雑所得_業務
+    "income_other",              # 雑所得_その他
+    "income_stcg",               # 総合短期譲渡所得
+    "income_ltcg",               # 総合長期譲渡所得
+    "income_occasional",         # 一時所得
+    "income_total",              # 合計所得金額（03で生成）
+    # 分離課税所得
+    "sep_stcg_general",          # 分離_短期譲渡一般
+    "sep_stcg_reduced",          # 分離_短期譲渡軽減
+    "sep_ltcg_general",          # 分離_長期譲渡一般
+    "sep_ltcg_specific",         # 分離_長期譲渡特定
+    "sep_ltcg_reduced",          # 分離_長期譲渡軽減
+    "sep_stock_general",         # 分離_一般株式譲渡
+    "sep_stock_listed",          # 分離_特定株式譲渡
+    "sep_dividend_listed",       # 分離_上場株式配当
+    "sep_futures",               # 分離_先物取引
+    "sep_forestry",              # 分離_山林
+    # 所得種別フラグ（03で生成）
+    "has_salary",
+    "has_business",
+    "has_pension",
+    "has_property",
+    "has_dividend",
+    "has_sep_income",            # 分離課税所得ありフラグ
+    # 所得控除（確定申告書第1表「所得から差し引かれる金額」）
+    "deduct_social_ins",         # 社会保険料控除
+    "deduct_small_biz_ins",      # 小規模企業共済等掛金控除
+    "deduct_life_ins",           # 生命保険料控除（住民税上限7万円 ※一般・介護医療・個人年金の3区分合計）
+    "deduct_earthquake_ins",     # 地震保険料控除（住民税上限2.5万円）
+    "deduct_casualty",           # 雑損控除
+    "deduct_medical",            # 医療費控除
+    "deduct_disability",         # 障害者控除
+    "deduct_widow",              # 寡婦・ひとり親控除
+    "deduct_spouse",             # 配偶者控除
+    "deduct_spouse_special",     # 配偶者特別控除
+    "deduct_dependent",          # 扶養控除
+    "deduct_basic",              # 基礎控除
+    "deduct_working_student",    # 勤労学生控除
+    "deduct_donation_income",    # 寄附金控除（所得控除）
+    "deduct_total",              # 所得控除合計（03で生成）
+    # 税額控除
+    "deduct_tax_housing",        # 住宅借入金等特別控除（住民税分）
+    "deduct_tax_furusato",       # ふるさと納税控除（住民税分）
+    "taxcredit_adjustment",      # 調整控除
+    "taxcredit_dividend",        # 配当控除
+    "taxcredit_foreign",         # 外国税額控除
+    "taxcredit_dividend_split",  # 配当割額・株式等譲渡所得割額の控除
+    # 比率特徴量（03で生成）
+    "deduct_rate",
+    "taxable_rate",
+    # 課税所得
+    "taxable_income",
+    # 属性・前年比
+    "age_num",
+    "is_tokubetsu",
+    "is_continuing",
+    "income_yoy_change",
+    "prev_income_total",
+    "prev_tax_amount",
+    "prev_taxable_income",
+]
+
+TARGET_COL = "tax_amount"
+
+# ─── ふるさと納税 推計パラメータ ──────────────────────────────────────────────
+# ※ 以下は概算値。実データで実績が算出できたら上書きすること。
+# 参考: 総務省「ふるさと納税に関する現況調査結果」（毎年公表）
+#       ただし課税所得比や特例割合は直接掲載されておらず、手元データからの推計が必要。
+
+###　実データでは不要
+FURUSATO_PARAMS = {
+    "donation_rate"  : 0.012,  # 課税所得に対する平均寄付率の概算（要実績検証）
+    "one_stop_ratio" : 0.57,   # ワンストップ特例利用者割合の概算（要実績検証）
+}
+
+# ─── 住宅ローン控除 推計パラメータ ────────────────────────────────────────────
+# upper_limit    : 令和4年1月以降入居の住民税控除上限（令和3年以前は97,500円等）
+#                  → 租税特別措置法41条の2の3 に基づく。法改正時は要更新。
+# annual_exit_rate: 完済・売却・控除期間終了による年間消滅率の概算
+#                  → 直接の統計ソースなし。控除期間13年で均等分散(≈7.7%)を基に
+#                    繰上返済・売却を勘案して5%と仮置き。実データで検証すること。
+
+###　実データでは"upper_limit": 136_500　のみ設定（予測用）
+HOUSING_PARAMS = {
+    "upper_limit"     : 136_500,
+    "annual_exit_rate": 0.05,
+}
+
+# ─── ダミーデータ生成設定 ─────────────────────────────────────────────────────
+RANDOM_SEED   = 42
+N_PER_YEAR    = 100_000     # 1年あたりの生成人数
+TURNOVER_RATE = 0.05        # 年間入退去率（5%退去・5%新規）
+# 男女比 [男性, 女性]（e-Stat 政府統計の総合窓口より20歳以上の人口を参照）
+GENDER_RATIO  = [0.483, 0.517]
+
+# 賃上げ反映フラグ（False にすると全年度一律 +0.5%/年 の旧挙動に戻る）
+APPLY_WAGE_GROWTH: bool = True
+
+# 給与収入の前年比成長率（連合「春季生活闘争 妥結結果」参考値）
+# ※ 実績確定後は実際の数値で上書きすること
+SALARY_GROWTH_RATES: dict[int, float] = {
+    2020: 1.000,
+    2021: 1.018,  # +1.8%
+    2022: 1.021,  # +2.1%
+    2023: 1.036,  # +3.6%
+    2024: 1.051,  # +5.1%
+    2025: 1.057,  # +5.7%
+}
+
+# 公的年金収入の前年比改定率（厚生労働省「年金額の改定」参考値）
+# ※ マクロ経済スライド・物価スライド等を反映。実績確定後は上書きすること
+PENSION_GROWTH_RATES: dict[int, float] = {
+    2020: 1.000,
+    2021: 0.999,  # -0.1%
+    2022: 0.996,  # -0.4%（マクロ経済スライド発動）
+    2023: 1.019,  # +1.9%
+    2024: 1.027,  # +2.7%
+    2025: 1.019,  # +1.9%
+}
+
+# 各年の対基準年人口倍率（2020年=1.000）。日本の生産年齢人口減少を設定（e-Stat 政府統計の総合窓口より20歳以上の人口を参照））
+POPULATION_GROWTH_RATES: dict[int, float] = {
+    2020: 1.000,
+    2021: 0.999,
+    2022: 0.997,
+    2023: 0.998,
+    2024: 0.988,
+    2025: 0.988,
+}
+
+# 年齢構成（住民税課税対象の実態に近い分布。5年刻みで統計データと対応）
+# 総務省統計局2024年データより割合を決定(各年齢区分の人口/20歳以上総人口)
+AGE_GROUPS  = [
+    "20-24", "25-29", "30-34", "35-39", "40-44", "45-49",
+    "50-54", "55-59", "60-64", "65-69", "70-74", "75-79", "80以上",
+]
+AGE_WEIGHTS = [
+     0.060,    0.062,    0.061,    0.066,    0.073,    0.084,
+     0.094,    0.081,    0.072,    0.070,    0.078,    0.075,    0.124,
+]
+
+# 年齢区分 → 数値マッピング（03_feature_eng.py と共有）
+AGE_MAP = {
+    "20-24": 1,  "25-29": 2,  "30-34": 3,  "35-39": 4,
+    "40-44": 5,  "45-49": 6,  "50-54": 7,  "55-59": 8,
+    "60-64": 9,  "65-69": 10, "70-74": 11, "75-79": 12, "80以上": 13,
+}
+
+# 年齢区分ごとの実年齢範囲（ダミーデータ生成用）
+AGE_RANGE_BY_GROUP = {
+    "20-24": (20, 24), "25-29": (25, 29), "30-34": (30, 34), "35-39": (35, 39),
+    "40-44": (40, 44), "45-49": (45, 49), "50-54": (50, 54), "55-59": (55, 59),
+    "60-64": (60, 64), "65-69": (65, 69), "70-74": (70, 74), "75-79": (75, 79),
+    "80以上": (80, 90),
+}
+
+# 住宅ローン控除 年齢別保有率（ダミーデータ生成用）
+# 国税庁の統計資料にないため、住宅金融支援機構の調査標本より割合を設定
+HOUSING_PROB_BY_AGE = {
+    "20-24": 0.01, "25-29": 0.16, "30-34": 0.20, "35-39": 0.22,
+    "40-44": 0.17, "45-49": 0.10, "50-54": 0.08, "55-59": 0.03,
+    "60-64": 0.02, "65-69": 0.01, "70-74": 0.00, "75-79": 0.00, "80以上": 0.00,
+}
+
+# ─── 翌年推計パラメータ（05_predict_2026.py が使用）─────────────────────────
+# 給与収入上昇率（実績トレンドを上書きしたい場合に設定。None なら実績トレンドを使用）
+# 政府目標賃上げ率（春闘等）を参考に設定。
+WAGE_RATE_OVERRIDE = None   # 例: 0.025 → +2.5%固定。None → 実績から自動算出
+WAGE_RATE_DELTA    = 0.0    # 実績トレンドへの加算値（WAGE_RATE_OVERRIDE が None の場合のみ有効）
+
+# ─── コンフォーマル予測（信頼区間）設定 ──────────────────────────────────────
+CONFORMAL_COVERAGE = 0.95   # 信頼水準（95%区間）
+
+# ─── 検証モード設定 ───────────────────────────────────────────────────────────
+# "standard"    : TRAIN_YEARS で学習 → TEST_YEAR で 1 回評価（デフォルト）
+# "walkforward" : 時系列フォールド検証後に同じ最終モデル（TRAIN_YEARS）を保存
+# "retrain_all" : 時系列フォールド検証後に TRAIN_YEARS + TEST_YEAR 全年度で再学習して保存
+#   フォールド例（TRAIN_YEARS=[2020..2024], TEST_YEAR=2025）:
+#     fold1: train=2020-2021 → test=2022
+#     fold2: train=2020-2022 → test=2023
+#     fold3: train=2020-2023 → test=2024
+#     fold4: train=2020-2024 → test=2025  ← val_result.csv の out-of-sample 評価に使用
+#   retrain_all では fold4 の個人予測を val_result.csv に保存し、
+#   最終モデルは 2020〜2025 全年度で学習する（実データ運用推奨）
+VALIDATION_MODE: str  = "standard"
+WF_MIN_TRAIN_YEARS: int = 2   # ウォークフォワードで使う最小訓練年数
