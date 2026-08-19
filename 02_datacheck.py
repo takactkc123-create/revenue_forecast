@@ -38,7 +38,7 @@ SAVE_DIR = "datacheck"
 
 
 # %%
-# --- fig1 : histgram
+# --- fig1 : histgram -------------------------------------------------------------------
 def plot_hist_by_year(df, col,show: bool = False): # , xticks, xlabels
     """
     col     : 列名（例："税額"）
@@ -55,11 +55,8 @@ def plot_hist_by_year(df, col,show: bool = False): # , xticks, xlabels
         axes[i].set_title(f"{year}年度")
         axes[i].set_xlabel(f"{col}")
         axes[i].set_ylabel("人数")
-        #axes[i].set_xticks(xticks)
-        #axes[i].set_xticklabels(xlabels)
-    
-    
 
+    
     fig.suptitle(f"{col} ヒストグラム")
 
     plt.tight_layout()
@@ -69,12 +66,6 @@ def plot_hist_by_year(df, col,show: bool = False): # , xticks, xlabels
     if show:
         plt.show()
     plt.close()
-    
-    
-
-plot_hist_by_year(df, "income_salary_gross")
-plot_hist_by_year(df, "income_pension_gross")
-plot_hist_by_year(df, "tax_amount")
 
 
 # %%
@@ -108,27 +99,6 @@ def plot_log_hist_by_year(df, col, xticks, xlabels, show: bool = False):
     plt.close()
     plt.show()
     
-# 給与収入
-plot_log_hist_by_year(
-    df, "income_salary_gross",
-    xticks=[4, 5, 6, 7, 8],
-    xlabels=["1万", "10万", "100万", "1000万", "1億"]
-)
-
-# 年金収入
-plot_log_hist_by_year(
-    df, "income_pension_gross",
-    xticks=[4, 5, 6, 7, 8],
-    xlabels=["1万", "10万", "100万", "1000万", "1億"]
-)
-
-# 税額
-plot_log_hist_by_year(
-    df, "tax_amount",
-    xticks=[3, 4, 5, 6, 7],
-    xlabels=["1千", "1万", "10万", "100万", "1000万"]
-)
-
 # %%
 
 # categorical columns
@@ -219,15 +189,6 @@ def boxplot_by_category(df, value_col, category , show: bool = False):
     else:
         print("categoryは 'age_group' / 'gender' / 'both' のいずれかを指定してください")
 
-# 給与収入を年齢区分別
-boxplot_by_category(df, "income_salary_gross", "both")
-
-# 年金収入を年齢×性別
-boxplot_by_category(df, "income_pension_gross", "both")
-
-# 税額を性別
-boxplot_by_category(df, "tax_amount", "both")
-
 # --- fig4 : barplot
 def barplot_by_category(df, value_col, category, show: bool = False):
     """
@@ -299,16 +260,6 @@ def barplot_by_category(df, value_col, category, show: bool = False):
     else:
         print("categoryは 'age_group' / 'gender' / 'both' のいずれかを指定してください")
         
-# 給与収入を年齢区分別
-barplot_by_category(df, "income_salary_gross", "both")
-
-# 年金収入を年齢×性別
-barplot_by_category(df, "income_pension_gross", "both")
-
-# 税額を性別
-barplot_by_category(df, "tax_amount", "both")
-
-
 # %%
 # --- fig5 : heatmap
 def plot_heatmap(df, figsize=(16, 8), cmap='coolwarm', annot=True, show: bool = False):
@@ -337,11 +288,10 @@ def plot_heatmap(df, figsize=(16, 8), cmap='coolwarm', annot=True, show: bool = 
         plt.show()
     plt.close()
 
-# 相関係数の数値を非表示
-plot_heatmap(df, annot=False)
+
 # %%
 
-# --- fig5-2
+# --- fig5-2 heatmap_TopBottom10
 def plot_heatmap_TopBottom10(df, figsize=(10, 10), cmap='coolwarm',annot=True, show: bool = False):
 
     corr = df.corr(numeric_only=True)["tax_amount"].sort_values(ascending=False).drop(["tax_amount","person_id", "year"])
@@ -359,8 +309,6 @@ def plot_heatmap_TopBottom10(df, figsize=(10, 10), cmap='coolwarm',annot=True, s
         plt.show()
     plt.close()
     
-plot_heatmap_TopBottom10(df)
-
 # --- fig6 : 散布図
 def plot_scatter_by_year(df, x_col, y_col,show:bool = False):
     """
@@ -400,12 +348,6 @@ def plot_scatter_by_year(df, x_col, y_col,show:bool = False):
     plt.close()
 
     
-# 給与収入と税額の散布図
-plot_scatter_by_year(df, "income_salary_gross", "tax_amount")
-plot_scatter_by_year(df, "income_pension_gross", "tax_amount")
-
-
-
 # --- fig7 税額控除散布図
 
 # 所得税率区分（tax_reform.compute_income_tax_rateのブラケットに対応するラベル）
@@ -467,12 +409,6 @@ def plot_scatter_by_tax_bracket(df, x_col, y_col, show:bool = False):
         plt.show()
     plt.close()
 
-# 給与収入とふるさと納税控除額の散布図（所得税率区分で色分け）
-plot_scatter_by_tax_bracket(df, "income_salary_gross", "deduct_tax_furusato")
-plot_scatter_by_tax_bracket(df, "income_salary_gross", "deduct_tax_housing")
-plot_scatter_by_tax_bracket(df, "taxable_income", "deduct_tax_furusato")
-plot_scatter_by_tax_bracket(df, "taxable_income", "deduct_tax_housing")
-
 # %%
 
 # --- fig8 定額減税可視化
@@ -501,7 +437,7 @@ def mock_teigaku_reduction(df, reduction_years=(2024,2025), amount_per_person=10
     df["tax_amount_before_reduction"] = df["tax_amount"] - reduction
     return df
 
-
+## 税額合計（億円）を年度別に積み上げ棒グラフで表示する関数（定額減税の影響可視化）
 def plot_teigaku_reduction_by_year(df, before_col="tax_amount_before_reduction",
                                     reduction_col="teigaku_reduction",
                                     show:bool = False):
@@ -536,10 +472,7 @@ def plot_teigaku_reduction_by_year(df, before_col="tax_amount_before_reduction",
         plt.show()
     plt.close()
 
-df_mock_teigaku = mock_teigaku_reduction(df)
-plot_teigaku_reduction_by_year(df_mock_teigaku)
-
-
+## 税額合計（億円）を年度別 / 年齢区分×性別で積み上げ棒グラフで表示する関数（定額減税の影響可視化）
 def plot_teigaku_reduction_by_age_gender(df, before_col="tax_amount_before_reduction",
                                           reduction_col="teigaku_reduction", agg="sum",
                                           show : bool = False):
@@ -599,12 +532,7 @@ def plot_teigaku_reduction_by_age_gender(df, before_col="tax_amount_before_reduc
         plt.show()
     plt.close()
 
-# 年齢区分×性別（合計）
-plot_teigaku_reduction_by_age_gender(df_mock_teigaku, agg="sum")
-# 年齢区分×性別（平均）
-plot_teigaku_reduction_by_age_gender(df_mock_teigaku, agg="mean")
-
-
+## 税額合計を年齢区分別・年度推移（合計・平均）で積み上げ棒グラフで表示する関数（定額減税の影響可視化）
 def plot_teigaku_reduction_yearly_by_age(df, before_col="tax_amount_before_reduction",
                                           reduction_col="teigaku_reduction", agg="sum",
                                           show : bool = False):
@@ -670,12 +598,7 @@ def plot_teigaku_reduction_yearly_by_age(df, before_col="tax_amount_before_reduc
         plt.show()
     plt.close()
 
-# 年齢区分別・年度推移（合計）
-plot_teigaku_reduction_yearly_by_age(df_mock_teigaku, agg="sum")
-# 年齢区分別・年度推移（平均）
-plot_teigaku_reduction_yearly_by_age(df_mock_teigaku, agg="mean")
-
-# --- fig9 : 給与収入と給与所得　可視化
+# --- fig9 : 給与収入と給与所得　可視化(税制改正前後の比較)
 def plot_salary_income_yearly(df, gross_col="income_salary_gross", net_col="income_salary",
                               show : bool = False):
     """
@@ -712,17 +635,94 @@ def plot_salary_income_yearly(df, gross_col="income_salary_gross", net_col="inco
         plt.show()
     plt.close()
 
-# 給与収入・給与所得の年度推移（合計・平均）
-plot_salary_income_yearly(df_mock_teigaku)
 
+# ─── メイン ───────────────────────────────────────────────────────────────────
 def main():
+    # --- fig1 : histgram
+    plot_hist_by_year(df, "income_salary_gross")
+    plot_hist_by_year(df, "income_pension_gross")
+    plot_hist_by_year(df, "tax_amount")
     
-    print("Finish!!!")
+    # --- fig2 : histgram log
+    ## 給与収入
+    plot_log_hist_by_year(
+        df, "income_salary_gross",
+        xticks=[4, 5, 6, 7, 8],
+        xlabels=["1万", "10万", "100万", "1000万", "1億"]
+    )
+    ## 年金収入
+    plot_log_hist_by_year(
+        df, "income_pension_gross",
+        xticks=[4, 5, 6, 7, 8],
+        xlabels=["1万", "10万", "100万", "1000万", "1億"]
+    )
+    ## 税額
+    plot_log_hist_by_year(
+        df, "tax_amount",
+        xticks=[3, 4, 5, 6, 7],
+        xlabels=["1千", "1万", "10万", "100万", "1000万"]
+    )
+    
+    # --- fig3 : boxplot
+    ## 給与収入を年齢×性別で区分
+    boxplot_by_category(df, "income_salary_gross", "both")
+    ## 年金収入を年齢×性別で区分
+    boxplot_by_category(df, "income_pension_gross", "both")
+    ## 税額を年齢×性別で区分
+    boxplot_by_category(df, "tax_amount", "both")
+    
+    # --- fig4 : barplot
+    ## 給与収入を年齢×性別で区分
+    barplot_by_category(df, "income_salary_gross", "both")
+    ## 年金収入を年齢×性別で区分
+    barplot_by_category(df, "income_pension_gross", "both")
+    ## 税額を年齢×性別で区分
+    barplot_by_category(df, "tax_amount", "both")
+    
+    # --- fig5 : heatmap
+    plot_heatmap(df, annot=False) # 相関係数の数値を非表示
+    
+    # --- fig5-2 heatmap_TopBottom10
+    plot_heatmap_TopBottom10(df)
+    
+    # --- fig6 : 散布図
+    ## 給与収入と税額の散布図
+    plot_scatter_by_year(df, "income_salary_gross", "tax_amount")
+    ## 年金収入と税額の散布図
+    plot_scatter_by_year(df, "income_pension_gross", "tax_amount")
+    
+    # --- fig7 税額控除散布図
+    ## 給与収入とふるさと納税控除額の散布図（所得税率区分で色分け）
+    plot_scatter_by_tax_bracket(df, "income_salary_gross", "deduct_tax_furusato")
+    ## 給与収入と住宅借入金特別控除額の散布図（所得税率区分で色分け）
+    plot_scatter_by_tax_bracket(df, "income_salary_gross", "deduct_tax_housing")
+    ## 税額とふるさと納税控除額の散布図（所得税率区分で色分け）
+    plot_scatter_by_tax_bracket(df, "taxable_income", "deduct_tax_furusato")
+    ## 税額と住宅借入金特別控除額の散布図（所得税率区分で色分け）
+    plot_scatter_by_tax_bracket(df, "taxable_income", "deduct_tax_housing")
 
+    # --- fig8 定額減税可視化
+    df_mock_teigaku = mock_teigaku_reduction(df)
+    ## 年度別の税額合計（億円）を積み上げ棒グラフで表示
+    plot_teigaku_reduction_by_year(df_mock_teigaku)
+    ## 年度別の税額合計を年齢区分×性別（合計）で積み上げ棒グラフで表示
+    plot_teigaku_reduction_by_age_gender(df_mock_teigaku, agg="sum")
+    ## 年度別の税額合計を年齢区分×性別（平均）で積み上げ棒グラフで表示
+    plot_teigaku_reduction_by_age_gender(df_mock_teigaku, agg="mean")
+    ## 税額合計を年齢区分別・年度推移（合計）で積み上げ棒グラフで表示
+    plot_teigaku_reduction_yearly_by_age(df_mock_teigaku, agg="sum")
+    ## 税額合計を年齢区分別・年度推移（平均）で積み上げ棒グラフで表示
+    plot_teigaku_reduction_yearly_by_age(df_mock_teigaku, agg="mean")
+    
+    # --- fig9 : 給与収入と給与所得　可視化(税制改正前後の比較)
+    plot_salary_income_yearly(df_mock_teigaku)
+    
+    print("Finished all plots")
+    
 if __name__ == "__main__":
     main()
 
-print("Finish!!!")
-# %%
+
+
 
 
