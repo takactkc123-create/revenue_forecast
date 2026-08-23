@@ -4,7 +4,7 @@
 個人住民税予測モデル - Step1: ダミーデータ生成
 
 確定申告書第1表の項目を基準に、現実に近い個人住民税レコードを生成する。
-実データが手元にある場合はこのファイルをスキップし、03_feature_eng.py から開始する。
+実データがある場合は 00_CsvCreate_SQL の手順でcsvを作成し、03_feature_eng.py から開始する。
 
 【実行方法】
   python 01_generate_dummy.py
@@ -15,7 +15,7 @@
   tax_reform.py（所得控除・課税所得計算関数）
 
 【export】
-  data/individual_raw.csv  ← 03_feature_eng.py の入力
+  data/individual_raw.csv  ← 03_feature_eng.py にて import 
 """
 import argparse
 import os
