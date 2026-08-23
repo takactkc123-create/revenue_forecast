@@ -1,0 +1,409 @@
+"""
+04_model_train.py
+=================
+個人住民税予測モデル - Step4: モデル学習・時系列検証
+
+LightGBM で個人別住民税額を学習し、時系列ホールドアウト（TEST_YEAR）で精度を検証する。
+tax_reform_config.csv の label_correction を適用してから学習する。
+
+【実行方法】
+  python 04_model_train.py                   # config の VALIDATION_MODE に従う
+  python 04_model_train.py --standard        # 標準モード（TRAIN_YEARS → TEST_YEAR）
+  python 04_model_train.py --walkforward     # ウォークフォワード検証 + 標準最終モデル
+  python 04_model_train.py --retrain-all     # ウォークフォワード検証 + 全年度再学習
+  python 04_model_train.py --walkforward --min-train 3  # 最小訓練年数を変更
+
+【検証モードの違い】
+  standard    : TRAIN_YEARS で学習 → TEST_YEAR で 1 回評価。保存モデル = TRAIN_YEARS 学習済み。
+  walkforward : フォールド別精度確認後、同じ最終モデル（TRAIN_YEARS）を保存。
+  retrain_all : フ��ール��別精度確認 → fold4 を val_result.csv に保存
+                → TRAIN_YEARS + TEST_YEAR 全年度で再学習して保存（実デー���運用推奨）。
+
+【import】
+  data/individual_prepared.csv  ← 03_feature_eng.py の出力
+  config.py                     ← モデル設定（特徴量・パラメータ・学習年・テスト年）
+  tax_reform_config.csv         ← 税制改正設定ファイル
+
+【export】
+  models/lgbm_model.txt              ← LightGBM モデルファイル
+  models/model_config.csv            ← 特徴量・パラメータ設定（05 が参照）
+  data/val_result.csv                ← 個人別予測 vs 実測（TEST_YEAR の out-of-sample）
+  data/yearly_result.csv             ← 年度別合算精度
+  data/walkforward_result_04.csv     ← walkforward / retrain_all モード時のみ出力
+
+【定額減税（2024年）の扱い】
+  teigaku_reduction は active=False に設定済み。
+  実データを投入する際は、2024年の税額を定額減税前の水準に加工してから
+  individual_raw.csv に配置する。モデル内での補正は行わない。
+"""
+
+import argparse
+import os
+import numpy as np
+import pandas as pd
+import lightgbm as lgb
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from tax_reform import load_reforms, apply_reforms, print_reform_summary, compute_non_taxable_flag
+from config import (
+    PREPARED_DATA_PATH, MODEL_DIR, MODEL_PATH, MODEL_CONFIG_PATH,
+    REFORM_CONFIG_PATH, TRAIN_YEARS, TEST_YEAR,
+    FEATURE_COLS, TARGET_COL, LGBM_PARAMS, MIN_TAX,
+    VALIDATION_MODE, WF_MIN_TRAIN_YEARS,
+)
+
+VAL_PATH    = "data/val_result.csv"
+YEARLY_PATH = "data/yearly_result.csv"
+WF_PATH     = "data/walkforward_result_04.csv"
+
+
+# ─── 精度指標 ──────────────────────────────────────────────────────────────────
+
+## 課税者のみの MAPE（非課税者は除外）
+def mape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    mask = y_true > 0
+    return float(np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100)
+
+## 非課税者(0円)を含む加重平均絶対誤差率。集計誤差率と等価で税収予測の主指標。
+def wmape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    """非課税者(0円)を含む加重平均絶対誤差率。集計誤差率と等価で税収予測の主指標。"""
+    total = np.sum(np.abs(y_true))
+    return float(np.sum(np.abs(y_true - y_pred)) / total * 100) if total > 0 else float("nan")
+
+
+def print_metrics(label: str, y_true: np.ndarray, y_pred: np.ndarray) -> dict:
+    mae_val   = mean_absolute_error(y_true, y_pred)
+    rmse_val  = np.sqrt(mean_squared_error(y_true, y_pred))
+    mape_val  = mape(y_true, y_pred)
+    wmape_val = wmape(y_true, y_pred)
+    r2_val    = r2_score(y_true, y_pred)
+    print(f"  {label}")
+    print(f"    MAE   : {mae_val:>12,.0f} 円")
+    print(f"    RMSE  : {rmse_val:>12,.0f} 円")
+    print(f"    MAPE  : {mape_val:>8.2f} %  ← 課税者のみ（非課税除外）")
+    print(f"    WMAPE : {wmape_val:>8.2f} %  ← 非課税含む・集計誤差率と等価")
+    print(f"    R2    : {r2_val:>8.3f}")
+    return {"label": label, "MAE": mae_val, "RMSE": rmse_val,
+            "MAPE": mape_val, "WMAPE": wmape_val, "R2": r2_val}
+
+
+def show_feature_importance(model: lgb.LGBMRegressor, feature_cols: list, top_n: int = 10):
+    fi = pd.DataFrame({
+        "特徴量": feature_cols,
+        "重要度": model.feature_importances_,
+    }).sort_values("重要度", ascending=False).head(top_n)
+    print(f"\n── 特徴量重要度 Top{top_n} ──")
+    max_imp = fi["重要度"].max()
+    for _, row in fi.iterrows():
+        bar = "#" * int(row["重要度"] / max_imp * 20)
+        print(f"  {row['特徴量']:35s} {bar} {row['重要度']:.4f}")
+
+## モデル予測に非課税フラグを適用して返す
+def _predict_with_nontaxable(
+    model: lgb.LGBMRegressor,
+    feat_df: pd.DataFrame,
+    raw_df: pd.DataFrame,
+    feat_cols: list,
+) -> np.ndarray:
+    ## モデル予測値を取得し、最小税額はMIN_TAX(5300円)となるよう設定
+    pred = np.maximum(model.predict(feat_df[feat_cols].fillna(0).values), MIN_TAX)
+    _nd  = raw_df["n_dependent"].values if "n_dependent" in raw_df.columns \
+        else (raw_df["deduct_dependent"].values / 330_000).round().astype(int)
+    ## tax_reform.py より関数を読み込み、非課税フラグを計算
+    _fl  = compute_non_taxable_flag(
+        raw_df["income_total"].values, _nd,
+        (raw_df["deduct_spouse"].values > 0).astype(int),
+    )
+    return np.where(_fl, 0, pred)
+
+
+# ─── ウォークフォワード検証(時系列フォールド検証を実行する) ───────────────────────────────────────────────────
+def run_walkforward_folds(
+    df: pd.DataFrame,
+    df_corrected: pd.DataFrame,
+    feat_cols: list,
+    min_train: int = WF_MIN_TRAIN_YEARS,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    ## 各年tについて「tより前の年」をtrain候補にし、その数がmin_train（=2）以上ある年だけ採用
+    all_years = sorted(df["year"].unique().tolist())
+    folds = [
+        ([y for y in all_years if y < t], t)
+        for t in all_years
+        if len([y for y in all_years if y < t]) >= min_train
+    ]
+
+    print(f"── ウォークフォワード検証（{len(folds)} フォールド / 最小訓練年数: {min_train}）──")
+    results       = []
+    last_fold_preds = pd.DataFrame()
+
+    for train_years, test_year in folds:
+        tr_df  = df_corrected[df_corrected["year"].isin(train_years)].reset_index(drop=True)
+        te_df  = df_corrected[df_corrected["year"] == test_year].reset_index(drop=True)
+        te_raw = df[df["year"] == test_year].reset_index(drop=True)
+
+        m = lgb.LGBMRegressor(**LGBM_PARAMS)
+        m.fit(
+            tr_df[feat_cols].fillna(0).values,
+            tr_df[TARGET_COL].values,
+            callbacks=[lgb.log_evaluation(period=-1)],
+        )
+
+        pred   = _predict_with_nontaxable(m, te_df, te_raw, feat_cols)
+        actual = te_raw[TARGET_COL].values
+        
+        ## 実測合計・予測合計・誤差率・MAPE を計算（億円単位）
+        act_b  = actual.sum() / 1e8
+        prd_b  = pred.sum()   / 1e8
+        err_r  = (prd_b - act_b) / act_b * 100
+        mape_v = mape(actual, pred)
+
+        tag = "  ← 本番テスト年と同条件" if test_year == TEST_YEAR else ""
+        print(f"  train={train_years[0]}〜{train_years[-1]} → test={test_year}:  "
+              f"実測 {act_b:.2f}億 / 予測 {prd_b:.2f}億 / 誤差率 {err_r:+.2f}%  "
+              f"個人MAPE {mape_v:.1f}%{tag}")
+
+        results.append({
+            "train_years"    : "|".join(str(y) for y in train_years),
+            "test_year"      : test_year,
+            "n_train"        : len(tr_df),
+            "n_test"         : len(te_df),
+            "actual_oku"     : round(act_b, 2), # 億円単位(小数点2桁で丸める)
+            "pred_oku"       : round(prd_b, 2),
+            "agg_error_pct"  : round(err_r, 2),
+            "individual_mape": round(mape_v, 2),
+        })
+
+        ## 最終フォールド（test=TEST_YEAR）の個人別予測を保持
+        if test_year == TEST_YEAR:
+            last_fold_preds = te_raw[["person_id", "year", TARGET_COL]].copy()
+            last_fold_preds["pred_tax"] = pred.round(0).astype(int)
+            last_fold_preds["error"]    = last_fold_preds["pred_tax"] - last_fold_preds[TARGET_COL]
+
+    fold_summary = pd.DataFrame(results)
+    avg_err = fold_summary["agg_error_pct"].mean()
+    std_err = fold_summary["agg_error_pct"].std()
+    print(f"\n  平均誤差率: {avg_err:+.2f}%  標準偏差: {std_err:.2f}%")
+    if std_err < 1.5:
+        print("  → フォールド間で安定（標準偏差 < 1.5%）")
+    else:
+        print("  → フォールド間で不安定（標準偏差 ≥ 1.5%）：特徴量または年度補正を見直すこと")
+    if abs(avg_err) < 1.0:
+        print("  → 系統的バイアスなし（平均誤差率 ±1%以内）")
+    elif avg_err > 0:
+        print(f"  → 全フォールドで過大予測傾向（平均 {avg_err:+.2f}%）")
+    else:
+        print(f"  → 全フォールドで過小予測傾向（平均 {avg_err:+.2f}%）")
+    print()
+
+    fold_summary.to_csv(WF_PATH, index=False, encoding="utf-8-sig")
+    print(f"  → {WF_PATH} にウォークフォワード結果を保存\n")
+    return fold_summary, last_fold_preds
+
+
+# ─── メイン ───────────────────────────────────────────────────────────────────
+def main():
+    parser = argparse.ArgumentParser()
+    ## 同時に指定できない（排他的な）コマンドライン引数のグループを作成するための argparse のメソッド
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument("--walkforward",  action="store_true",
+                            help="ウォークフォワード検証 + 標準最終モデル（TRAIN_YEARS）")
+    mode_group.add_argument("--retrain-all",  action="store_true",
+                            help="ウォークフォワード検証 + 全年度（TRAIN+TEST）再学習（実データ推奨）")
+    mode_group.add_argument("--standard",     action="store_true",
+                            help="標準モード（TRAIN_YEARS → TEST_YEAR の 1 回評価）")
+    parser.add_argument("--min-train", type=int, default=WF_MIN_TRAIN_YEARS,
+                        help=f"ウォークフォワードの最小訓練年数（デフォルト: {WF_MIN_TRAIN_YEARS}）")
+    args = parser.parse_args()
+
+    ## CLI フラグ > config の VALIDATION_MODE
+    if args.walkforward:
+        mode = "walkforward"
+    elif args.retrain_all:
+        mode = "retrain_all"
+    elif args.standard:
+        mode = "standard"
+    else:
+        mode = VALIDATION_MODE
+
+    ## config.py から MODEL_DIR = "models"　--(folder)
+    os.makedirs(MODEL_DIR, exist_ok=True)
+    print(f"=== 04: モデル学習・時系列検証  [{mode}モード] ===\n")
+
+    ## config.py から PREPARED_DATA_PATH = "data/individual_prepared.csv"
+    print(f"データ読込: {PREPARED_DATA_PATH}") 
+    df = pd.read_csv(PREPARED_DATA_PATH, encoding="utf-8-sig")
+    print(f"  {len(df):,} 件 / {df['year'].nunique()} 年分\n")
+
+    feat_cols = [c for c in FEATURE_COLS if c in df.columns]
+    missing   = [c for c in FEATURE_COLS if c not in df.columns]
+    if missing:
+        print(f"  ! 列なし（スキップ）: {missing}\n")
+    df[feat_cols] = df[feat_cols].fillna(0)
+
+    # ── 税制改正補正（学習ラベル） ───────────────────────────────────────────
+    ## config.py から REFORM_CONFIG_PATH = "data/tax_reform_config.csv"
+    print("── 税制改正補正（label_correction） ──")
+    
+    reforms = load_reforms(
+        REFORM_CONFIG_PATH,
+        target_year=max(TRAIN_YEARS + [TEST_YEAR]),
+        reform_type="label_correction",
+    )
+    print_reform_summary(reforms)
+    df_corrected = apply_reforms(df.copy(), reforms)
+
+    if reforms:
+        for r in reforms:
+            yr = r["params"]["_effective_year"]
+            if yr in df["year"].values:
+                orig = df[df["year"] == yr][TARGET_COL].mean() / 1e4
+                corr = df_corrected[df_corrected["year"] == yr][TARGET_COL].mean() / 1e4
+                print(f"  {yr}年 平均税額: 補正前 {orig:.1f}万円 → 補正後 {corr:.1f}万円")
+    print()
+
+    # ── ウォークフォワード検証（walkforward / retrain_all モード ─────────────
+    last_fold_preds = pd.DataFrame()
+    if mode in ("walkforward", "retrain_all"):
+        _, last_fold_preds = run_walkforward_folds(
+            df, df_corrected, feat_cols, min_train=args.min_train
+        )
+
+    # ── 最終モデルの訓練年度を決定 ────────────────────────────────────────────
+    if mode == "retrain_all":
+        final_train_years = TRAIN_YEARS + [TEST_YEAR]
+        print(f"── 最終モデル学習（全年度 {final_train_years[0]}〜{final_train_years[-1]}）──")
+        print(f"  ※ {TEST_YEAR}年は訓練に含まれるため in-sample。精度評価はウォークフォワードを参照。")
+    else:
+        final_train_years = TRAIN_YEARS
+        print(f"── 最終モデル学習 ──")
+
+    # おためし
+    print(f"  final_train_years:{final_train_years}")
+    
+    train_df = df_corrected[df_corrected["year"].isin(final_train_years)].reset_index(drop=True)
+    print(f"  訓練: {len(train_df):,} 件（{final_train_years[0]}〜{final_train_years[-1]}年・label補正済）\n")
+
+    model = lgb.LGBMRegressor(**LGBM_PARAMS)
+    print("学習中... (LightGBM)")
+    model.fit(
+        train_df[feat_cols].values,
+        train_df[TARGET_COL].values,
+        callbacks=[lgb.log_evaluation(period=-1)],
+    )
+    print("完了\n")
+
+    # ── 訓練データ精度（過学習チェック） ─────────────────────────────────────
+    print(f"── 訓練データ精度（{final_train_years[0]}〜{final_train_years[-1]}年） ──")
+    pred_train   = _predict_with_nontaxable(model, train_df, train_df, feat_cols)
+    metrics_train = print_metrics("訓練データ（label補正済）", train_df[TARGET_COL].values, pred_train)
+    print()
+
+    # ── 個人レベル精度（テスト年度の評価） ───────────────────────────────────
+    if mode == "retrain_all" and not last_fold_preds.empty:
+        ## retrain_all: fold4 の out-of-sample 予測を評価（train=2020-2024, test=2025）
+        print(f"── 個人レベル精度（ウォークフォワード最終フォールド: train={TRAIN_YEARS[0]}〜{TRAIN_YEARS[-1]} → test={TEST_YEAR}）──")
+        y_test    = last_fold_preds[TARGET_COL].values
+        pred_test = last_fold_preds["pred_tax"].values.astype(float)
+        metrics_test = print_metrics(f"最終フォールド out-of-sample（{TEST_YEAR}年）", y_test, pred_test)
+    else:
+        print(f"── 個人レベル精度（テスト年 = {TEST_YEAR}年） ──")
+        test_df     = df_corrected[df_corrected["year"] == TEST_YEAR].reset_index(drop=True)
+        test_df_raw = df[df["year"] == TEST_YEAR].reset_index(drop=True)
+        pred_test   = _predict_with_nontaxable(model, test_df, test_df_raw, feat_cols)
+        y_test      = test_df_raw[TARGET_COL].values
+        metrics_test = print_metrics("テストデータ（実測値）", y_test, pred_test)
+
+    ratio = metrics_test["MAE"] / metrics_train["MAE"] if metrics_train["MAE"] > 0 else float("inf")
+    if mode == "retrain_all":
+        print(f"\n  ※ retrain_all モード: 訓練精度は 2020〜2025 in-sample、テスト精度は fold4 out-of-sample。")
+    elif ratio > 2.0:
+        print(f"\n  訓練/テスト MAE 比: [!] 過学習の疑い（訓練の {ratio:.1f}x）")
+    elif ratio > 1.5:
+        print(f"\n  訓練/テスト MAE 比: [~] やや過学習気味（訓練の {ratio:.1f}x）")
+    else:
+        print(f"\n  訓練/テスト MAE 比: [OK] 過学習なし（訓練の {ratio:.1f}x）")
+
+    # ── 年度別合算精度 ─────────────────────────────────────────────
+    print("\n── 年度別合算精度 ──")
+    yearly_rows  = []
+    reform_years = {r["params"]["_effective_year"] for r in reforms}
+    show_years   = final_train_years if mode == "retrain_all" else TRAIN_YEARS + [TEST_YEAR]
+
+    for yr in show_years:
+        yr_raw  = df[df["year"] == yr].reset_index(drop=True)
+        yr_corr = df_corrected[df_corrected["year"] == yr].reset_index(drop=True)
+        p_yr    = _predict_with_nontaxable(model, yr_corr, yr_raw, feat_cols)
+        y_yr    = yr_raw[TARGET_COL].values
+        act_b   = y_yr.sum() / 1e8
+        prd_b   = p_yr.sum() / 1e8
+        err_r   = (prd_b - act_b) / act_b * 100
+        note    = "（補正年）" if yr in reform_years else ""
+        is_test = yr == TEST_YEAR
+        if mode == "retrain_all" and is_test:
+            tag = "← in-sample（訓練込み）"
+        elif is_test:
+            tag = "← TEST"
+        else:
+            tag = ""
+        print(f"  {yr}年: 実測 {act_b:.2f}億 / 予測 {prd_b:.2f}億 / 誤差率 {err_r:+.2f}%  {tag}{note}")
+        yearly_rows.append({
+            "year"           : yr,
+            "actual_oku"     : round(act_b, 2),
+            "pred_oku"       : round(prd_b, 2),
+            "error_rate_pct" : round(err_r, 2),
+            "is_test"        : is_test,
+            "label_corrected": yr in reform_years,
+            "in_sample"      : mode == "retrain_all" and is_test,
+        })
+
+    show_feature_importance(model, feat_cols)
+
+    # ── val_result.csv の保存 ─────────────────────────────────────────────────
+    if mode == "retrain_all" and not last_fold_preds.empty:
+        ## fold4 の out-of-sample 予測をそのまま保存
+        last_fold_preds.to_csv(VAL_PATH, index=False, encoding="utf-8-sig")
+    else:
+        ## standard / walkforward: 最終モデルの TEST_YEAR 予測を保存
+        test_df     = df_corrected[df_corrected["year"] == TEST_YEAR].reset_index(drop=True)
+        test_df_raw = df[df["year"] == TEST_YEAR].reset_index(drop=True)
+        pred_test_final = _predict_with_nontaxable(model, test_df, test_df_raw, feat_cols)
+        result_df       = test_df_raw[["person_id", "year", TARGET_COL]].copy()
+        result_df["pred_tax"] = pred_test_final.round(0).astype(int)
+        result_df["error"]    = result_df["pred_tax"] - result_df[TARGET_COL]
+        result_df.to_csv(VAL_PATH, index=False, encoding="utf-8-sig")
+
+    # ── CSV・モデル保存 ──────────────────────────────────────────────────────
+    
+    ## 04_model_train.py で定義 : YEARLY_PATH = "data/yearly_result.csv"
+    ## data の フィールドは yearly_rows で設定
+    pd.DataFrame(yearly_rows).to_csv(YEARLY_PATH, index=False, encoding="utf-8-sig")
+
+    ## config.py で設定 MODEL_CONFIG_PATH  = "models/model_config.csv"
+    ## data の フィールドは rows で設定
+    rows = [
+        ("feature_cols",           "|".join(feat_cols)),
+        ("train_years",            "|".join(str(y) for y in final_train_years)),
+        ("test_year",              str(TEST_YEAR)),
+        ("lgbm_n_estimators",      str(LGBM_PARAMS["n_estimators"])),
+        ("lgbm_learning_rate",     str(LGBM_PARAMS["learning_rate"])),
+        ("lgbm_num_leaves",        str(LGBM_PARAMS["num_leaves"])),
+        ("lgbm_min_child_samples", str(LGBM_PARAMS["min_child_samples"])),
+        ("lgbm_random_state",      str(LGBM_PARAMS["random_state"])),
+        ("lgbm_n_jobs",            str(LGBM_PARAMS["n_jobs"])),
+        ("min_tax",                str(MIN_TAX)),
+        ("reform_config",          REFORM_CONFIG_PATH),
+        ("validation_mode",        mode),
+    ]
+    pd.DataFrame(rows, columns=["key", "value"]).to_csv(
+        MODEL_CONFIG_PATH, index=False, encoding="utf-8-sig"
+    )
+    model.booster_.save_model(MODEL_PATH)
+
+    print(f"\n→ {MODEL_PATH} にモデルを保存（訓練: {final_train_years[0]}〜{final_train_years[-1]}年）")
+    print(f"→ {MODEL_CONFIG_PATH} に設定を保存")
+    print(f"→ {VAL_PATH} に個人別検証結果を保存")
+    print(f"→ {YEARLY_PATH} に年度別合算精度を保存")
+    print("\n次: python 05_predict_2026.py")
+
+
+if __name__ == "__main__":
+    main()
