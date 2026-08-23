@@ -9,15 +9,12 @@ tax_reform_config.csv の label_correction を適用してから学習する。
 【実行方法】
   python 04_model_train.py                   # config の VALIDATION_MODE に従う
   python 04_model_train.py --standard        # 標準モード（TRAIN_YEARS → TEST_YEAR）
+        -> TRAIN_YEARS で学習 → TEST_YEAR で 1 回評価。保存モデル = TRAIN_YEARS 学習済み。
   python 04_model_train.py --walkforward     # ウォークフォワード検証 + 標準最終モデル
+        -> フォールド別精度確認後、同じ最終モデル（TRAIN_YEARS）を保存
   python 04_model_train.py --retrain-all     # ウォークフォワード検証 + 全年度再学習
+        -> フォールド別精度確認 → fold4 を val_result.csv に保存（TRAIN_YEARS + TEST_YEAR 全年度で再学習して保存)
   python 04_model_train.py --walkforward --min-train 3  # 最小訓練年数を変更
-
-【検証モードの違い】
-  standard    : TRAIN_YEARS で学習 → TEST_YEAR で 1 回評価。保存モデル = TRAIN_YEARS 学習済み。
-  walkforward : フォールド別精度確認後、同じ最終モデル（TRAIN_YEARS）を保存。
-  retrain_all : フ��ール��別精度確認 → fold4 を val_result.csv に保存
-                → TRAIN_YEARS + TEST_YEAR 全年度で再学習して保存（実デー���運用推奨）。
 
 【import】
   data/individual_prepared.csv  ← 03_feature_eng.py の出力
