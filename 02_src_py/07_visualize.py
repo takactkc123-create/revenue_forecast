@@ -33,7 +33,7 @@ from config import PREDICT_YEAR
 matplotlib.rcParams["font.family"] = ["MS Gothic", "Hiragino Sans", "DejaVu Sans"]
 matplotlib.rcParams["axes.unicode_minus"] = False
 
-RESULTS_DIR  = "results"
+RESULTS_DIR  = "05_results"
 YEARLY_PATH  = "data/yearly_result.csv"
 VAL_PATH     = "data/val_result.csv"
 WF_PATH      = "data/walkforward_result_04.csv"

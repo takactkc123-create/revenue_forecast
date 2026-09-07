@@ -92,7 +92,7 @@ uv run python 07_visualize.py
 │   ├── lgbm_model.txt         # 学習済みモデル
 │   └── model_config.csv       # 特徴量・パラメータ・検証モード記録
 │
-└── results/
+└── 05_results/
     ├── fig1_yearly_accuracy.png          # 年度別合算精度グラフ
     ├── fig2_error_distribution.png       # 個人税額誤差分布
     ├── fig3_age_breakdown_2026.png       # 年齢区分別税額
@@ -116,7 +116,7 @@ uv run python 07_visualize.py
 | 2 | `04_model_train.py` | `individual_prepared.csv` | `lgbm_model.txt`, `yearly_result.csv` |
 | 3 | `05_predict_2026.py` | `lgbm_model.txt`, `individual_prepared.csv` | `prediction_2026.csv` |
 | 4 | `06_trend_correction.py` | `prediction_2026.csv`, `yearly_result.csv` | `prediction_adjusted_2026.csv` |
-| 5 | `07_visualize.py` | 上記CSV群 | `results/*.png` |
+| 5 | `07_visualize.py` | 上記CSV群 | `05_results/*.png` |
 
 実データCSVに必要な列は `03_feature_eng.py` 冒頭のドキュメントを参照。SQLでの抽出方法は `00_SQL/` 配下を参照。
 

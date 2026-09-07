@@ -33,7 +33,7 @@ labels = [f"{i}~{i+4}" for i in range(0, 100, 5)]
 df["年齢区分"] = pd.cut(df["年齢"], bins=bins, labels=labels, right=False)
 
 '''
-SAVE_DIR = "datacheck"
+SAVE_DIR = "04_datacheck"
 
 
 
