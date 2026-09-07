@@ -20,6 +20,7 @@
 """
 
 import argparse
+import json
 import os
 import numpy as np
 import pandas as pd
@@ -36,7 +37,7 @@ RESULTS_DIR  = "results"
 YEARLY_PATH  = "data/yearly_result.csv"
 VAL_PATH     = "data/val_result.csv"
 WF_PATH      = "data/walkforward_result_04.csv"
-MC_PATH      = "models/model_config.csv"
+MC_PATH      = "models/model_config.json"
 
 AGE_ORDER = [
     "20-24", "25-29", "30-34", "35-39", "40-44", "45-49",
@@ -444,15 +445,15 @@ def fig7_walkforward_report(yearly_df: pd.DataFrame, val_df: pd.DataFrame | None
 
     wf_df = pd.read_csv(WF_PATH, encoding="utf-8-sig")
 
-    # model_config.csv から検証モードと最終訓練年度を取得
+    # model_config.json から検証モードと最終訓練年度を取得
     mode              = "不明"
     final_train_label = ""
     if os.path.exists(MC_PATH):
-        mc = pd.read_csv(MC_PATH, encoding="utf-8-sig").set_index("key")["value"]
-        mode      = mc.get("validation_mode", "不明")
-        raw_years = mc.get("train_years", "")
-        yparts    = raw_years.split("|")
-        final_train_label = f"{yparts[0]}〜{yparts[-1]}年" if len(yparts) >= 2 else raw_years
+        with open(MC_PATH, encoding="utf-8") as f:
+            mc = json.load(f)
+        mode        = mc.get("validation_mode", "不明")
+        train_years = mc.get("train_years", [])
+        final_train_label = f"{train_years[0]}〜{train_years[-1]}年" if len(train_years) >= 2 else str(train_years)
 
     # ── サマリー統計 ────────────────────────────────────────────────────────────
     avg_err  = wf_df["agg_error_pct"].mean()

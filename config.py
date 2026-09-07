@@ -23,7 +23,7 @@ PREPARED_DATA_PATH = "data/individual_prepared.csv"
 SUMMARY_PATH       = "data/individual_summary.csv"
 MODEL_DIR          = "models"
 MODEL_PATH         = "models/lgbm_model.txt"
-MODEL_CONFIG_PATH  = "models/model_config.csv"
+MODEL_CONFIG_PATH  = "models/model_config.json"
 REFORM_CONFIG_PATH = "data/tax_reform_config.csv"
 
 # ─── 税額下限（住民税均等割：道府県民税1,800円 + 市町村民税3,500円 = 5,300円）──

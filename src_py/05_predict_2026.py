@@ -17,7 +17,7 @@ tax_reform_config.csv の feature_correction を適用して税制改正を特�
 【import】
   data/individual_prepared.csv   ← 03 の出力
   models/lgbm_model.txt          ← 04 の出力
-  models/model_config.csv        ← 04 の出力
+  models/model_config.json       ← 04 の出力
   config.py                      ← モデル設定（特徴量・パラメータ・学習年・テスト年）
   tax_reform_config.csv          ← 税制改正設定ファイル
 
@@ -29,6 +29,7 @@ tax_reform_config.csv の feature_correction を適用して税制改正を特�
 """
 
 import argparse
+import json
 import os
 import numpy as np
 import pandas as pd
@@ -46,24 +47,12 @@ from config import (
 )
 
 
-# ─── モデル設定 CSV の読み込み ─────────────────────────────────────────────────
+# ─── モデル設定 JSON の読み込み ─────────────────────────────────────────────────
 def load_model_config(path: str) -> dict:
-    df  = pd.read_csv(path, encoding="utf-8-sig")
-    raw = dict(zip(df["key"], df["value"].astype(str)))
-    return {
-        "feature_cols": raw["feature_cols"].split("|"),
-        "train_years" : [int(y) for y in raw["train_years"].split("|")],
-        "test_year"   : int(raw["test_year"]),
-        "min_tax"     : int(raw.get("min_tax", MIN_TAX)),
-        "lgbm_params" : {
-            "n_estimators"     : int(raw["lgbm_n_estimators"]),
-            "learning_rate"    : float(raw["lgbm_learning_rate"]),
-            "num_leaves"       : int(raw["lgbm_num_leaves"]),
-            "min_child_samples": int(raw["lgbm_min_child_samples"]),
-            "random_state"     : int(raw["lgbm_random_state"]),
-            "n_jobs"           : int(raw["lgbm_n_jobs"]),
-        },
-    }
+    with open(path, encoding="utf-8") as f:
+        config = json.load(f)
+    config.setdefault("min_tax", MIN_TAX)
+    return config
 
 
 # ─── 住宅ローン控除 翌年推計 ──────────────────────────────────────────────────
