@@ -15,11 +15,11 @@
 
 - **位置づけ**：自治体の予算編成における税収見込み算出を補助する**意思決定支援ツール**である。出力結果（個人別予測・信頼区間・自治体合算値）は、あくまで翌年度予算を見積もる際の参考値という位置づけである。個人ごとの税額を最終的な税額の決定・徴収は既存の税務基幹システムが担う。
 - **対象範囲**：個人住民税（均等割＋所得割）の翌年度税収予測に限定している。所得税・法人住民税・固定資産税等は対象外。
-- **入力から出力までの流れ**：基幹系（住民税システム）から抽出した個人別の収入・控除データ（`00_SQL/`のSQLで抽出）を起点に、特徴量エンジニアリング→学習→翌年予測→マクロ補正→可視化、という一方向のパイプラインで、最終的に「自治体全体の翌年度税収見込み額（信頼区間付き）」を算出する。
+- **入力から出力までの流れ**：基幹系（住民税システム）から抽出した個人別の収入・控除データ（`01_src_sql/00_CsvCreate.sql`で抽出）を起点に、特徴量エンジニアリング→学習→翌年予測→マクロ補正→可視化、という一方向のパイプラインで、最終的に「自治体全体の翌年度税収見込み額（信頼区間付き）」を算出する。
 - **2つの版の役割分担**：
   - **ダミー版**：実データが手元にない段階でもパイプライン全体の動作確認・精度検証手法の妥当性確認ができるようにするための PoC（概念実証）用途。統計データに基づく疑似データで代替している。
-  - **実データ版**：実際の基幹系データを投入して運用する本番想定のパイプライン。列名・控除計算式が日本語スキーマに置き換わっている。
-- **前提と限界**：予測は過去の実績パターンの学習に基づくものであり、税制改正の影響・急激な経済変動・自治体固有の制度（寒冷地加算等）は、`tax_reform_config.csv`等による手動補正でカバーする設計になっている。補正が追いついていない改正・制度がある場合、予測精度は保証されない。
+  - **実データ版**：実際の基幹系データを投入して運用する本番想定のパイプライン。列名・控除計算式が日本語スキーマに置き換わっている（`config_REAL.py`/`tax_reform_REAL.py`系。本READMEはダミー版を対象とする）。
+- **前提と限界**：予測は過去の実績パターンの学習に基づくものであり、税制改正の影響・急激な経済変動・自治体固有の制度（寒冷地加算等）は、`data/tax_reform_config.csv`等による手動補正でカバーする設計になっている。補正が追いついていない改正・制度がある場合、予測精度は保証されない。
 
 ---
 
@@ -36,30 +36,42 @@
   1. 課税者の理論下限（均等割の固定額＝`MIN_TAX`）でクリップ
   2. 非課税基準（地方税法295条）に該当する人を強制的に0円へ上書き
 
-  という2段階の後処理（[`04_model_train.py`の`_predict_with_nontaxable`](04_model_train.py#L101)）を必ず適用している。モデル単体の予測精度に頼るのではなく、税制のルールベース補正と組み合わせる設計である。
-- **時系列検証との相性**：`--walkforward`/`--retrain-all`モードによる拡張窓（expanding window）検証で、年ごとの安定性・過学習の有無を確認できる（詳細は「[各ファイルの詳細](#04_model_trainpy--モデル学習精度検証)」）。
+  という2段階の後処理（[`02_src_py/04_model_train.py`の`_predict_with_nontaxable`](02_src_py/04_model_train.py#L101)）を必ず適用している。モデル単体の予測精度に頼るのではなく、税制のルールベース補正と組み合わせる設計である。
+- **時系列検証との相性**：`--walkforward`/`--retrain-all`モードによる拡張窓（expanding window）検証で、年ごとの安定性・過学習の有無を確認できる（詳細は「[各ファイルの詳細](#各ファイルの詳細)」）。
 
 
 ---
 
 ## 実行方法
 
+`config.py`・`tax_reform.py`はプロジェクトルート直下、実行スクリプト本体は`02_src_py/`に置かれている。スクリプトはルートの共通モジュールを`import`するため、**必ずルートを`PYTHONPATH`に含めて実行する**（`uv run`はデフォルトでカレントディレクトリを認識しないため明示が必要）。
+
 ```bash
 # 実データがある場合（03から開始）
-uv run python 03_feature_eng.py
-uv run python 04_model_train.py --retrain-all   # walk-forward検証 + 全年再学習
-uv run python 05_predict_2026.py
-uv run python 06_trend_correction.py
-uv run python 07_visualize.py
+PYTHONPATH=. uv run python 02_src_py/03_feature_eng.py
+PYTHONPATH=. uv run python 02_src_py/04_model_train.py --retrain-all   # walk-forward検証 + 全年再学習
+PYTHONPATH=. uv run python 02_src_py/05_predict_2026.py
+PYTHONPATH=. uv run python 02_src_py/06_trend_correction.py
+PYTHONPATH=. uv run python 02_src_py/07_visualize.py
 
 # ダミーデータで試す場合（01から開始）
-uv run python 01_generate_dummy.py
-uv run python 03_feature_eng.py
-uv run python 04_model_train.py --retrain-all
-uv run python 05_predict_2026.py
-uv run python 06_trend_correction.py
-uv run python 07_visualize.py
+PYTHONPATH=. uv run python 02_src_py/01_generate_dummy.py
+PYTHONPATH=. uv run python 02_src_py/03_feature_eng.py
+PYTHONPATH=. uv run python 02_src_py/04_model_train.py --retrain-all
+PYTHONPATH=. uv run python 02_src_py/05_predict_2026.py
+PYTHONPATH=. uv run python 02_src_py/06_trend_correction.py
+PYTHONPATH=. uv run python 02_src_py/07_visualize.py
 ```
+
+### Notebook版での実行
+
+`03_notebooks/`配下に、各スクリプトと同一ロジックのJupyter Notebook版（`01_generate_dummy.ipynb`〜`07_visualize.ipynb`）を用意している。CLI版との違いは以下の通り。
+
+- `main()`に集約せず、関数定義・実行・結果表示・保存をセル単位に分割しており、上から順に実行すると各ステップの出力（表・グラフ）がその場に表示される。
+- CLI引数（`--walkforward`, `--year`等）に相当する設定は、各ノートブック内の`NOTEBOOK_ARGS`セルで指定する（`NOTEBOOK_ARGS = ["--retrain-all"]`のようにCLIと同じ文字列を並べる）。
+- `03_notebooks/`から開いてそのまま実行してもプロジェクトルート基準の相対パスが解決できるよう、各ノートブックの先頭で自動的にカレントディレクトリをルートへ戻す処理が入っている。VS Code等で開く場合は`.venv`（`2026-chotei-01`）をカーネルに選択すること。
+
+グラフを都度確認しながら進めたい場合や、途中の中間データを見ながら試行錯誤したい場合はNotebook版、バッチ実行・自動化にはCLI版（`02_src_py/`）を使う想定である。
 
 ---
 
@@ -67,18 +79,35 @@ uv run python 07_visualize.py
 
 ```
 .
-├── config.py                  # 全設定値の一元管理（ここだけ触ればパラメータ調整可能）
-├── tax_reform.py              # 税制改正補正ロジック（共通モジュール）
+├── config.py                     # 全設定値の一元管理（ここだけ触ればパラメータ調整可能）
+├── tax_reform.py                 # 税制改正補正ロジック（共通モジュール）
 │
-├── 01_generate_dummy.py       # ダミーデータ生成
-├── 02_datacheck.py            # データチェック
-├── 03_feature_eng.py          # 特徴量エンジニアリング
-├── 04_model_train.py          # モデル学習・精度検証
-├── 05_predict_2026.py         # 翌年度予測
-├── 06_trend_correction.py     # マクロ補正（トレンド・税制改正）
-├── 07_visualize.py            # グラフ出力
+├── 01_src_sql/
+│   └── 00_CsvCreate.sql          # 基幹系DBからの実データ抽出SQL
 │
-├── data/
+├── 02_src_py/                    # 実行スクリプト本体（CLI版。PYTHONPATH=. で実行）
+│   ├── 01_generate_dummy.py      # ダミーデータ生成
+│   ├── 02_datacheck.py           # データチェック（EDA）
+│   ├── 03_feature_eng.py         # 特徴量エンジニアリング
+│   ├── 04_model_train.py         # モデル学習・精度検証
+│   ├── 05_predict_2026.py        # 翌年度予測
+│   ├── 06_trend_correction.py    # マクロ補正（トレンド・税制改正）
+│   └── 07_visualize.py           # グラフ出力
+│
+├── 03_notebooks/                 # 上記と同一ロジックのNotebook版（探索的な実行・確認用）
+│   ├── 01_generate_dummy.ipynb
+│   ├── 02_datacheck.ipynb
+│   ├── 03_feature_eng.ipynb
+│   ├── 04_model_train.ipynb
+│   ├── 05_predict_2026.ipynb
+│   ├── 06_trend_correction.ipynb
+│   └── 07_visualize.ipynb
+│
+├── 04_datacheck/                 # 02_datacheck.py の出力（EDA図。fig1〜fig9）
+│
+├── 05_results/                   # 07_visualize.py の出力（最終レポート図。fig1〜fig7）
+│
+├── data/                         # 非公開（.gitignore対象）。実データ運用時もこのフォルダを使う
 │   ├── individual_raw.csv              # 入力データ（実データ or ダミー）
 │   ├── individual_prepared.csv         # 特徴量追加済みデータ
 │   ├── tax_reform_config.csv           # 税制改正補正ルール
@@ -88,19 +117,12 @@ uv run python 07_visualize.py
 │   ├── prediction_2026.csv             # 個人別予測値
 │   └── prediction_adjusted_2026.csv    # 補正後予測値
 │
-├── models/
-│   ├── lgbm_model.txt         # 学習済みモデル
-│   └── model_config.csv       # 特徴量・パラメータ・検証モード記録
-│
-└── 05_results/
-    ├── fig1_yearly_accuracy.png          # 年度別合算精度グラフ
-    ├── fig2_error_distribution.png       # 個人税額誤差分布
-    ├── fig3_age_breakdown_2026.png       # 年齢区分別税額
-    ├── fig4_summary_2026.png             # 予測サマリー
-    ├── fig5_metrics_dashboard.png        # 評価指標テーブル＋年度別誤差率棒グラフ
-    ├── fig6_tax_timeseries_2026.png      # 税収実績推移＋予測・信頼区間の時系列グラフ
-    └── fig7_walkforward_report.png       # walk-forward検証レポート（--walkforward/--retrain-all時のみ）
+└── models/                       # 非公開（.gitignore対象）
+    ├── lgbm_model.txt            # 学習済みモデル
+    └── model_config.json         # 特徴量・パラメータ・検証モード記録
 ```
+
+> `data/`・`models/`はダミー・実データ両方の運用で共通して使われる作業用フォルダのため、GitHubには公開していない（`.gitignore`対象）。GitHub上のフォルダ表示順（`01_src_sql`〜`05_results`）は、アルファベット順にしか並ばないGitHubの仕様に合わせて連番を振ったものであり、パイプラインの処理順（SQL抽出→スクリプト→Notebook→EDA→最終成果物）と一致させている。
 
 ---
 
@@ -112,13 +134,13 @@ uv run python 07_visualize.py
 
 | ステップ | スクリプト | 入力 | 出力 |
 |---:|---|---|---|
-| 1 | `03_feature_eng.py` | `data/individual_raw.csv` | `data/individual_prepared.csv` |
-| 2 | `04_model_train.py` | `individual_prepared.csv` | `lgbm_model.txt`, `yearly_result.csv` |
-| 3 | `05_predict_2026.py` | `lgbm_model.txt`, `individual_prepared.csv` | `prediction_2026.csv` |
-| 4 | `06_trend_correction.py` | `prediction_2026.csv`, `yearly_result.csv` | `prediction_adjusted_2026.csv` |
-| 5 | `07_visualize.py` | 上記CSV群 | `05_results/*.png` |
+| 1 | `02_src_py/03_feature_eng.py` | `data/individual_raw.csv` | `data/individual_prepared.csv` |
+| 2 | `02_src_py/04_model_train.py` | `individual_prepared.csv` | `lgbm_model.txt`, `yearly_result.csv` |
+| 3 | `02_src_py/05_predict_2026.py` | `lgbm_model.txt`, `individual_prepared.csv` | `prediction_2026.csv` |
+| 4 | `02_src_py/06_trend_correction.py` | `prediction_2026.csv`, `yearly_result.csv` | `prediction_adjusted_2026.csv` |
+| 5 | `02_src_py/07_visualize.py` | 上記CSV群 | `05_results/*.png` |
 
-実データCSVに必要な列は `03_feature_eng.py` 冒頭のドキュメントを参照。SQLでの抽出方法は `00_SQL/` 配下を参照。
+実データCSVに必要な列は `02_src_py/03_feature_eng.py` 冒頭のドキュメントを参照。SQLでの抽出方法は `01_src_sql/00_CsvCreate.sql` を参照。
 
 ### パターン B：ダミーデータで試す場合
 
@@ -126,7 +148,8 @@ uv run python 07_visualize.py
 
 | ステップ | スクリプト | 入力 | 出力 |
 |---:|---|---|---|
-| 0 | `01_generate_dummy.py` | `config.py` の設定値 | `data/individual_raw.csv` |
+| 0 | `02_src_py/01_generate_dummy.py` | `config.py` の設定値 | `data/individual_raw.csv` |
+| 0.5 | `02_src_py/02_datacheck.py`（任意） | `data/individual_raw.csv` | `04_datacheck/*.png` |
 | 1〜5 | パターンAと同じ | — | — |
 
 ---
@@ -151,7 +174,7 @@ uv run python 07_visualize.py
 
 ---
 
-### `01_generate_dummy.py` — ダミーデータ生成
+### `02_src_py/01_generate_dummy.py` — ダミーデータ生成
 
 実データがない状態でもモデルの動作確認ができるよう、統計的に現実に近いダミーデータを生成する。
 
@@ -172,7 +195,13 @@ uv run python 07_visualize.py
 
 ---
 
-### `03_feature_eng.py` — 特徴量エンジニアリング
+### `02_src_py/02_datacheck.py` — データチェック（EDA）
+
+`data/individual_raw.csv`（実データ or ダミー）を可視化し、収入・税額の分布や年齢区分×性別の傾向、定額減税の影響等を`04_datacheck/`にfig1〜fig9として出力する。モデル学習前のデータ確認用途で、パイプラインの必須ステップではない。
+
+---
+
+### `02_src_py/03_feature_eng.py` — 特徴量エンジニアリング
 
 生データに含まれない「モデルへの入力として有効な列」を追加する。
 
@@ -195,7 +224,7 @@ uv run python 07_visualize.py
 
 ---
 
-### `04_model_train.py` — モデル学習・精度検証
+### `02_src_py/04_model_train.py` — モデル学習・精度検証
 
 **モデル選定：LightGBM**
 
@@ -229,19 +258,20 @@ uv run python 07_visualize.py
 - 税制改正がある年のラベルは `tax_reform_config.csv` の `label_correction` で補正してから学習する（改正の影響を過去年に誤帰属させない）。
 - 非課税基準（地方税法第295条）以下の予測値は強制的に0円に上書きされる。
 - `year` は特徴量（FEATURE_COLS）に含まれない。木モデルは訓練範囲外の年値を外挿できないためであり、年ごとの経済動向はダミーデータの上昇率設定や実データの特徴量分布として取り込む設計になっている。
+- 学習結果の設定（特徴量列・ハイパーパラメータ・検証モード等）は`models/model_config.json`にJSON形式で保存され、`05_predict_2026.py`・`07_visualize.py`が読み込む。
 
 ---
 
-### `05_predict_2026.py` — 翌年度予測
+### `02_src_py/05_predict_2026.py` — 翌年度予測
 
 直近年のデータをベースに給与・所得トレンドを外挿して2026年の特徴量を生成し、学習済みモデルで予測する。
 
 **主なオプション**
 
 ```bash
-python 05_predict_2026.py --year 2027           # 予測年の変更
-python 05_predict_2026.py --file data/xxx.csv   # 実データCSVを直接指定
-python 05_predict_2026.py --wage-rate 0.025     # 給与上昇率を直接指定
+PYTHONPATH=. uv run python 02_src_py/05_predict_2026.py --year 2027           # 予測年の変更
+PYTHONPATH=. uv run python 02_src_py/05_predict_2026.py --file data/xxx.csv   # 実データCSVを直接指定
+PYTHONPATH=. uv run python 02_src_py/05_predict_2026.py --wage-rate 0.025     # 給与上昇率を直接指定
 ```
 
 **留意点**
@@ -252,7 +282,7 @@ python 05_predict_2026.py --wage-rate 0.025     # 給与上昇率を直接指定
 
 ---
 
-### `06_trend_correction.py` — マクロ補正
+### `02_src_py/06_trend_correction.py` — マクロ補正
 
 個人レベルの予測では吸収しきれない集計レベルのズレを補正する。
 
@@ -268,7 +298,7 @@ python 05_predict_2026.py --wage-rate 0.025     # 給与上昇率を直接指定
 
 ---
 
-### `07_visualize.py` — グラフ出力
+### `02_src_py/07_visualize.py` — グラフ出力
 
 | グラフ | ファイル名 | 内容 |
 |---|---|---|
@@ -280,11 +310,13 @@ python 05_predict_2026.py --wage-rate 0.025     # 給与上昇率を直接指定
 | Fig6 | `fig6_tax_timeseries_2026.png` | 2020〜前年度の実績推移＋予測年度の予測値・95%信頼区間を重ねた時系列グラフ |
 | Fig7 | `fig7_walkforward_report.png` | walk-forward各フォールドの精度テーブル＋誤差率棒グラフ（`--walkforward`/`--retrain-all`時のみ出力） |
 
+出力先は`05_results/`。
+
 ---
 
 ### `tax_reform.py` — 税制改正補正モジュール
 
-04〜06から呼び出される共通モジュール。以下の主要計算式を提供する。
+`02_src_py/`配下の04〜06から呼び出される共通モジュール（プロジェクトルート直下に配置）。以下の主要計算式を提供する。
 
 - 給与所得控除（年次別のブラケット計算）
 - 公的年金等控除（65歳未満・以上で異なる計算式）
@@ -295,7 +327,7 @@ python 05_predict_2026.py --wage-rate 0.025     # 給与上昇率を直接指定
 **留意点**
 
 - 住民税と所得税では控除額の上限・計算式が異なる（例：生命保険料控除の上限は住民税70,000円〔一般・介護医療・個人年金の3区分合計〕、所得税120,000円）。
-- 定額減税（2024年）は `active: False` で無効化済み。実データを投入する際は2024年の税額を定額減税前の水準に加工してから使用することで対応。定額減税による税収への影響については`02_datacheck.py`にて集計結果を確認する。
+- 定額減税（2024年）は `active: False` で無効化済み。実データを投入する際は2024年の税額を定額減税前の水準に加工してから使用することで対応。定額減税による税収への影響については`02_src_py/02_datacheck.py`にて集計結果を確認する。
 
 ---
 
@@ -382,7 +414,7 @@ WF_MIN_TRAIN_YEARS = 2              # fold1 の最低訓練年数
 | 項目 | 内容 |
 |---|---|
 | データ種別 | ダミーデータ（`01_generate_dummy.py`生成、全国統計ベース） |
-| 使用スクリプト | ダミー版 無印（`01/03/04/05/06/07_*.py`、2026-08-31時点の最新コード） |
+| 使用スクリプト | ダミー版 無印（`02_src_py/01〜07_*.py`） |
 | 実行コマンド・オプション | `04_model_train.py --retrain-all`（walk-forward検証＋全年再学習） |
 | 学習データ年度範囲（`TRAIN_YEARS`） | 2020〜2024年（`--retrain-all`のため最終モデルは`TEST_YEAR`含む2020〜2025年で再学習） |
 | テスト年度（`TEST_YEAR`）／予測年度（`PREDICT_YEAR`） | 2025年 ／ 2026年 |
@@ -452,8 +484,8 @@ WF_MIN_TRAIN_YEARS = 2              # fold1 の最低訓練年数
 
 | 項目 | 内容 |
 |---|---|
-| データ種別 | 実データ（`00_CsvCreate_SQL`より csvデータ抽出） |
-| 使用スクリプト | `03/04/05/06/07_*.py` |
+| データ種別 | 実データ（`01_src_sql/00_CsvCreate.sql`より csvデータ抽出） |
+| 使用スクリプト | 実データ版（`03/04/05/06/07_*REAL_*.py`） |
 | 実行コマンド・オプション | `04_model_train.py --retrain-all`（walk-forward検証＋全年再学習） |
 | 学習データ年度範囲（`TRAIN_YEARS`） | 2020〜2024年（`--retrain-all`のため最終モデルは`TEST_YEAR`含む2020〜2025年で再学習） |
 | テスト年度（`TEST_YEAR`）／予測年度（`PREDICT_YEAR`） | 2025年 ／ 2026年 |
@@ -489,13 +521,13 @@ WF_MIN_TRAIN_YEARS = 2              # fold1 の最低訓練年数
 ## 環境
 
 ```bash
-# 依存パッケージのインストール
+# 依存パッケージのインストール（pyproject.toml / uv.lock を元に .venv を構築）
 uv sync
 ```
 
-主要ライブラリ：`lightgbm`, `pandas`, `numpy`, `scikit-learn`, `matplotlib`
+主要ライブラリ：`lightgbm`, `pandas`, `numpy`, `scikit-learn`, `matplotlib`, `jupyter`
 
-Python 3.11以上を想定している。
+Python 3.14以上を想定している（`.python-version`参照）。
 
 ---
 
@@ -503,4 +535,4 @@ Python 3.11以上を想定している。
 
 - このモデルはダミーデータをもとにした概念検証用途で構築されている。実際の税収予測に使用する際は、実データによる再学習と十分な検証を行うこと。
 - 住民税の計算式は自治体・年度によって一部異なる場合がある（級地区分による非課税ラインの違い等）。本実装は地方税法に基づく標準税率および1級地の非課税範囲を前提としている。
-- 個人情報を含む実データを扱う場合は、データの取扱いポリシーに従うこと。
+- 個人情報を含む実データを扱う場合は、データの取扱いポリシーに従うこと。`data/`・`models/`フォルダはこの理由から常に`.gitignore`対象とし、GitHubには公開しない。
