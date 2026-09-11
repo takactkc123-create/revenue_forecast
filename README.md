@@ -23,6 +23,21 @@
 
 ---
 
+## 結果の概要
+
+> 詳細な検証条件・全指標は「[最新のダミーデータでの結果](#最新のダミーデータでの結果)」「[実データでの検証結果](#実データでの検証結果)」を参照。
+
+| | 使用モデル | 検証データ規模 | 導入効果（集計精度） |
+|---|---|---|---|
+| ダミーデータ検証 | LightGBM（勾配ブースティング木） | 597,000件（6年分） | 2026年度税収予測 205.12億円（前年比+6.11%、95%信頼区間[201.21〜209.25]億円）／集計誤差 WMAPE 0.55% |
+| 実データ検証 | 同上 | 約1,200,000件（6年分） | 個人単位の誤差（RMSE・R²）はダミーより悪化するが、自治体全体の集計精度はダミーデータと同水準を維持 |
+
+- LightGBMで個人ごとの翌年度住民税額を予測し、自治体全体で積み上げることで、高精度に翌年度税収見込みを算出することが目的のモデルである。
+- 個人単位の予測誤差は高所得層の外れ値に引っ張られやすいが、自治体が最終的に必要とする「税収合計」への影響は限定的である（多くの誤差が相殺されるため）。
+- 実データでも、非課税判定（地方税法295条）による強制0円補正や上限パーセンタイルでのクリップなど、税制ルールベースの後処理と組み合わせることで集計精度を担保している。
+
+---
+
 ## 選定モデル 
 
 > LightGBM（勾配ブースティング木）
@@ -44,24 +59,26 @@
 
 ## 実行方法
 
-`config.py`・`tax_reform.py`はプロジェクトルート直下、実行スクリプト本体は`02_src_py/`に置かれている。スクリプトはルートの共通モジュールを`import`するため、**必ずルートを`PYTHONPATH`に含めて実行する**（`uv run`はデフォルトでカレントディレクトリを認識しないため明示が必要）。
+`config.py`・`tax_reform.py`は`00_src_settings/`に、実行スクリプト本体は`02_src_py/`に置かれている。`02_src_py/`配下の各スクリプトは自身の場所から`00_src_settings/`への絶対パスを実行時に`sys.path`へ追加してから`import`するため、`PYTHONPATH`の設定は不要である。ただし`data/`等への相対パスはカレントディレクトリ基準のため、**プロジェクトルートから実行すること**。
 
 ```bash
 # 実データがある場合（03から開始）
-PYTHONPATH=. uv run python 02_src_py/03_feature_eng.py
-PYTHONPATH=. uv run python 02_src_py/04_model_train.py --retrain-all   # walk-forward検証 + 全年再学習
-PYTHONPATH=. uv run python 02_src_py/05_predict_2026.py
-PYTHONPATH=. uv run python 02_src_py/06_trend_correction.py
-PYTHONPATH=. uv run python 02_src_py/07_visualize.py
+uv run python 02_src_py/03_feature_eng.py
+uv run python 02_src_py/04_model_train.py --retrain-all   # walk-forward検証 + 全年再学習
+uv run python 02_src_py/05_predict_2026.py
+uv run python 02_src_py/06_trend_correction.py
+uv run python 02_src_py/07_visualize.py
 
 # ダミーデータで試す場合（01から開始）
-PYTHONPATH=. uv run python 02_src_py/01_generate_dummy.py
-PYTHONPATH=. uv run python 02_src_py/03_feature_eng.py
-PYTHONPATH=. uv run python 02_src_py/04_model_train.py --retrain-all
-PYTHONPATH=. uv run python 02_src_py/05_predict_2026.py
-PYTHONPATH=. uv run python 02_src_py/06_trend_correction.py
-PYTHONPATH=. uv run python 02_src_py/07_visualize.py
+uv run python 02_src_py/01_generate_dummy.py
+uv run python 02_src_py/03_feature_eng.py
+uv run python 02_src_py/04_model_train.py --retrain-all
+uv run python 02_src_py/05_predict_2026.py
+uv run python 02_src_py/06_trend_correction.py
+uv run python 02_src_py/07_visualize.py
 ```
+
+Windows PowerShellでも同じコマンドがそのまま使える（`PYTHONPATH`の明示設定が不要になったため、bash/PowerShell間の構文差異を気にする必要はない）。
 
 ### Notebook版での実行
 
@@ -79,20 +96,43 @@ PYTHONPATH=. uv run python 02_src_py/07_visualize.py
 
 ```
 .
-├── config.py                     # 全設定値の一元管理（ここだけ触ればパラメータ調整可能）
-├── tax_reform.py                 # 税制改正補正ロジック（共通モジュール）
+├── 00_src_settings/
+│   ├── config.py                 # 全設定値の一元管理（ここだけ触ればパラメータ調整可能）
+│   └── tax_reform.py             # 税制改正補正ロジック（共通モジュール）
 │
 ├── 01_src_sql/
 │   └── 00_CsvCreate.sql          # 基幹系DBからの実データ抽出SQL
 │
-├── 02_src_py/                    # 実行スクリプト本体（CLI版。PYTHONPATH=. で実行）
+├── 02_src_py/                    # 実行スクリプト本体（CLI版。プロジェクトルートから実行）
 │   ├── 01_generate_dummy.py      # ダミーデータ生成
-│   ├── 02_datacheck.py           # データチェック（EDA）
+│   │     in  : config.pyの設定値
+│   │     out : data/01out_individual_raw.csv
+│   │
+│   ├── 02_datacheck.py           # データチェック（EDA・任意ステップ）
+│   │     in  : data/01out_individual_raw.csv
+│   │     out : 04_datacheck/*.png
+│   │
 │   ├── 03_feature_eng.py         # 特徴量エンジニアリング
+│   │     in  : data/01out_individual_raw.csv
+│   │     out : data/03out_individual_prepared.csv, data/03out_individual_summary.csv
+│   │
 │   ├── 04_model_train.py         # モデル学習・精度検証
+│   │     in  : data/03out_individual_prepared.csv
+│   │     out : models/lgbm_model.txt, models/model_config.json,
+│   │           data/04out_val_result.csv, data/04out_yearly_result.csv,
+│   │           data/04out_walkforward_result.csv（--walkforward/--retrain-all時のみ）
+│   │
 │   ├── 05_predict_2026.py        # 翌年度予測
+│   │     in  : data/03out_individual_prepared.csv, models/lgbm_model.txt, models/model_config.json
+│   │     out : data/05out_prediction_YYYY.csv, data/05out_prediction_summary_YYYY.csv
+│   │
 │   ├── 06_trend_correction.py    # マクロ補正（トレンド・税制改正）
+│   │     in  : data/05out_prediction_YYYY.csv, data/04out_yearly_result.csv, data/03out_individual_prepared.csv
+│   │     out : data/06out_prediction_adjusted_YYYY.csv, data/06out_prediction_adjusted_summary_YYYY.csv
+│   │
 │   └── 07_visualize.py           # グラフ出力
+│         in  : 04〜06の出力CSV群, models/model_config.json
+│         out : 05_results/*.png
 │
 ├── 03_notebooks/                 # 上記と同一ロジックのNotebook版（探索的な実行・確認用）
 │   ├── 01_generate_dummy.ipynb
@@ -108,21 +148,21 @@ PYTHONPATH=. uv run python 02_src_py/07_visualize.py
 ├── 05_results/                   # 07_visualize.py の出力（最終レポート図。fig1〜fig7）
 │
 ├── data/                         # 非公開（.gitignore対象）。実データ運用時もこのフォルダを使う
-│   ├── individual_raw.csv              # 入力データ（実データ or ダミー）
-│   ├── individual_prepared.csv         # 特徴量追加済みデータ
-│   ├── tax_reform_config.csv           # 税制改正補正ルール
-│   ├── yearly_result.csv               # 年度別合算精度
-│   ├── val_result.csv                  # 個人別検証結果
-│   ├── walkforward_result_04.csv       # walk-forward各フォールドの精度（--walkforward/--retrain-all時のみ）
-│   ├── prediction_2026.csv             # 個人別予測値
-│   └── prediction_adjusted_2026.csv    # 補正後予測値
+│   ├── 01out_individual_raw.csv        # 入力データ（実データ or ダミー）← 01 の出力
+│   ├── 03out_individual_prepared.csv   # 特徴量追加済みデータ ← 03 の出力
+│   ├── tax_reform_config.csv           # 税制改正補正ルール（手動管理・to_csv対象外）
+│   ├── 04out_yearly_result.csv         # 年度別合算精度 ← 04 の出力
+│   ├── 04out_val_result.csv            # 個人別検証結果 ← 04 の出力
+│   ├── 04out_walkforward_result.csv    # walk-forward各フォールドの精度（--walkforward/--retrain-all時のみ）← 04 の出力
+│   ├── 05out_prediction_2026.csv       # 個人別予測値 ← 05 の出力
+│   └── 06out_prediction_adjusted_2026.csv  # 補正後予測値 ← 06 の出力
 │
 └── models/                       # 非公開（.gitignore対象）
     ├── lgbm_model.txt            # 学習済みモデル
     └── model_config.json         # 特徴量・パラメータ・検証モード記録
 ```
 
-> `data/`・`models/`はダミー・実データ両方の運用で共通して使われる作業用フォルダのため、GitHubには公開していない（`.gitignore`対象）。GitHub上のフォルダ表示順（`01_src_sql`〜`05_results`）は、アルファベット順にしか並ばないGitHubの仕様に合わせて連番を振ったものであり、パイプラインの処理順（SQL抽出→スクリプト→Notebook→EDA→最終成果物）と一致させている。
+> `data/`・`models/`はダミー・実データ両方の運用で共通して使われる作業用フォルダのため、GitHubには公開していない（`.gitignore`対象）。GitHub上のフォルダ表示順（`00_src_settings`〜`05_results`）は、アルファベット順にしか並ばないGitHubの仕様に合わせて連番を振ったものであり、共通設定→パイプラインの処理順（SQL抽出→スクリプト→Notebook→EDA→最終成果物）と一致させている。
 
 ---
 
@@ -134,11 +174,13 @@ PYTHONPATH=. uv run python 02_src_py/07_visualize.py
 
 | ステップ | スクリプト | 入力 | 出力 |
 |---:|---|---|---|
-| 1 | `02_src_py/03_feature_eng.py` | `data/individual_raw.csv` | `data/individual_prepared.csv` |
-| 2 | `02_src_py/04_model_train.py` | `individual_prepared.csv` | `lgbm_model.txt`, `yearly_result.csv` |
-| 3 | `02_src_py/05_predict_2026.py` | `lgbm_model.txt`, `individual_prepared.csv` | `prediction_2026.csv` |
-| 4 | `02_src_py/06_trend_correction.py` | `prediction_2026.csv`, `yearly_result.csv` | `prediction_adjusted_2026.csv` |
+| 1 | `02_src_py/03_feature_eng.py` | `data/01out_individual_raw.csv` | `data/03out_individual_prepared.csv` |
+| 2 | `02_src_py/04_model_train.py` | `03out_individual_prepared.csv` | `lgbm_model.txt`, `04out_yearly_result.csv` |
+| 3 | `02_src_py/05_predict_2026.py` | `lgbm_model.txt`, `03out_individual_prepared.csv` | `05out_prediction_2026.csv` |
+| 4 | `02_src_py/06_trend_correction.py` | `05out_prediction_2026.csv`, `04out_yearly_result.csv` | `06out_prediction_adjusted_2026.csv` |
 | 5 | `02_src_py/07_visualize.py` | 上記CSV群 | `05_results/*.png` |
+
+出力ファイル名の先頭2桁は、そのファイルを`to_csv`で書き出したパイプラインのステップ番号を示す（例: `03out_`＝`03_feature_eng.py`の出力）。`tax_reform_config.csv`は唯一の例外で、どのステップも書き出さない手動管理の入力ファイルのためプレフィックスを付けていない。
 
 実データCSVに必要な列は `02_src_py/03_feature_eng.py` 冒頭のドキュメントを参照。SQLでの抽出方法は `01_src_sql/00_CsvCreate.sql` を参照。
 
@@ -148,8 +190,8 @@ PYTHONPATH=. uv run python 02_src_py/07_visualize.py
 
 | ステップ | スクリプト | 入力 | 出力 |
 |---:|---|---|---|
-| 0 | `02_src_py/01_generate_dummy.py` | `config.py` の設定値 | `data/individual_raw.csv` |
-| 0.5 | `02_src_py/02_datacheck.py`（任意） | `data/individual_raw.csv` | `04_datacheck/*.png` |
+| 0 | `02_src_py/01_generate_dummy.py` | `config.py` の設定値 | `data/01out_individual_raw.csv` |
+| 0.5 | `02_src_py/02_datacheck.py`（任意） | `data/01out_individual_raw.csv` | `04_datacheck/*.png` |
 | 1〜5 | パターンAと同じ | — | — |
 
 ---
@@ -197,7 +239,7 @@ PYTHONPATH=. uv run python 02_src_py/07_visualize.py
 
 ### `02_src_py/02_datacheck.py` — データチェック（EDA）
 
-`data/individual_raw.csv`（実データ or ダミー）を可視化し、収入・税額の分布や年齢区分×性別の傾向、定額減税の影響等を`04_datacheck/`にfig1〜fig9として出力する。モデル学習前のデータ確認用途で、パイプラインの必須ステップではない。
+`data/01out_individual_raw.csv`（実データ or ダミー）を可視化し、収入・税額の分布や年齢区分×性別の傾向、定額減税の影響等を`04_datacheck/`にfig1〜fig9として出力する。モデル学習前のデータ確認用途で、パイプラインの必須ステップではない。
 
 ---
 
@@ -238,9 +280,9 @@ PYTHONPATH=. uv run python 02_src_py/07_visualize.py
 | `--walkforward` | fold1〜fold4 の時系列クロスバリデーション | モデルの安定性確認・バイアス検出 |
 | `--retrain-all` | walk-forward 検証 → `TRAIN_YEARS + TEST_YEAR` 全年で再学習 | **実データ運用時の推奨フロー** |
 
-`--retrain-all` の場合、walk-forward の最終フォールド（fold4）のアウトオブサンプル予測を `val_result.csv` として使用するため、評価の公平性は保たれる。最終モデルは全年データを学習済みのため、直近年（2025年）のパターンも反映した状態で2026年を予測できる。
+`--retrain-all` の場合、walk-forward の最終フォールド（fold4）のアウトオブサンプル予測を `04out_val_result.csv` として使用するため、評価の公平性は保たれる。最終モデルは全年データを学習済みのため、直近年（2025年）のパターンも反映した状態で2026年を予測できる。
 
-各フォールドの精度は `data/walkforward_result_04.csv` に保存される。
+各フォールドの精度は `data/04out_walkforward_result.csv` に保存される。
 
 **評価指標**
 
@@ -269,9 +311,9 @@ PYTHONPATH=. uv run python 02_src_py/07_visualize.py
 **主なオプション**
 
 ```bash
-PYTHONPATH=. uv run python 02_src_py/05_predict_2026.py --year 2027           # 予測年の変更
-PYTHONPATH=. uv run python 02_src_py/05_predict_2026.py --file data/xxx.csv   # 実データCSVを直接指定
-PYTHONPATH=. uv run python 02_src_py/05_predict_2026.py --wage-rate 0.025     # 給与上昇率を直接指定
+uv run python 02_src_py/05_predict_2026.py --year 2027           # 予測年の変更
+uv run python 02_src_py/05_predict_2026.py --file data/xxx.csv   # 実データCSVを直接指定
+uv run python 02_src_py/05_predict_2026.py --wage-rate 0.025     # 給与上昇率を直接指定
 ```
 
 **留意点**
