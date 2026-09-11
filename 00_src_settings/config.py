@@ -18,9 +18,9 @@ TEST_YEAR    = 2025
 PREDICT_YEAR = 2026
 
 # ─── パスの共通設定 ────────────────────────────────────────────────────────────
-RAW_DATA_PATH      = "data/individual_raw.csv"
-PREPARED_DATA_PATH = "data/individual_prepared.csv"
-SUMMARY_PATH       = "data/individual_summary.csv"
+RAW_DATA_PATH      = "data/01out_individual_raw.csv"
+PREPARED_DATA_PATH = "data/03out_individual_prepared.csv"
+SUMMARY_PATH       = "data/03out_individual_summary.csv"
 MODEL_DIR          = "models"
 MODEL_PATH         = "models/lgbm_model.txt"
 MODEL_CONFIG_PATH  = "models/model_config.json"

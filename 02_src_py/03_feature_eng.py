@@ -5,21 +5,24 @@
 
 【実行方法】
   python 03_feature_eng.py
-  python 03_feature_eng.py --file data/individual_raw.csv
+  python 03_feature_eng.py --file data/01out_individual_raw.csv
 
 【import】
-data/individual_raw.csv（実データ or ダミーデータ）
+data/01out_individual_raw.csv（実データ or ダミーデータ）
 
 【export】
-  data/individual_prepared.csv（特徴量追加済みデータ）
+  data/03out_individual_prepared.csv（特徴量追加済みデータ）
      └─ 04_model_train.py で学習用データとして使用
 
 """
 
 import argparse
 import os
+import sys
 import numpy as np
 import pandas as pd
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "00_src_settings"))
 from tax_reform import (
     compute_basic_deduction,
     estimate_furusato_resident_deduction,

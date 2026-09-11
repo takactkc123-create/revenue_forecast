@@ -5,20 +5,20 @@
 【補正の種類】
   A. トレンド補正（wage_trend_factor）
      - 年度別合算予測の系統的な過大・過小傾向を緩和する乗率補正
-     - 04 の yearly_result.csv に基づいて自動算出（オプションで上書き可）
+     - 04 の 04out_yearly_result.csv に基づいて自動算出（オプションで上書き可）
 
   B. 税制改正マクロ補正（tax_reform_config.csv の macro_correction）
      - 扶養要件引き上げ（2026年〜）: 扶養控除新規取得者の増加分を推計して加算
      - 特定親族特別控除（2026年〜）: 19-22歳扶養親族への追加控除を推計して減算
 
 【import】
-  data/prediction_YYYY.csv       ← 05 の出力
-  data/yearly_result.csv         ← 04 の出力
-  data/individual_prepared.csv   ← 03 の出力
+  data/05out_prediction_YYYY.csv      ← 05 の出力
+  data/04out_yearly_result.csv        ← 04 の出力
+  data/03out_individual_prepared.csv  ← 03 の出力
 
 【export】
-  data/prediction_adjusted_YYYY.csv      ← 補正後の個人別予測値
-  data/prediction_adjusted_summary_YYYY.csv ← 補正後の合計サマリー
+  data/06out_prediction_adjusted_YYYY.csv          ← 補正後の個人別予測値
+  data/06out_prediction_adjusted_summary_YYYY.csv  ← 補正後の合計サマリー
 
 【使い方】
   python 06_trend_correction.py
@@ -29,21 +29,24 @@
 
 import argparse
 import os
+import sys
 import numpy as np
 import pandas as pd
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "00_src_settings"))
 from tax_reform import load_reforms, print_reform_summary
 from config import (
     PREPARED_DATA_PATH, REFORM_CONFIG_PATH,
     PREDICT_YEAR, TARGET_COL,
 )
 
-YEARLY_PATH = "data/yearly_result.csv"
+YEARLY_PATH = "data/04out_yearly_result.csv"
 
 
 # ─── トレンド補正乗率の算出 ───────────────────────────────────────────────────
 def compute_trend_factor(yearly_df: pd.DataFrame) -> float:
     """
-    04 の年度別合算精度（yearly_result.csv）を使い、
+    04 の年度別合算精度（04out_yearly_result.csv）を使い、
     訓練年の平均誤差率からトレンド補正乗率を算出する。
 
     誤差率 = (予測 − 実測) / 実測
@@ -142,7 +145,7 @@ def main():
 
     print(f"=== 06: {args.year}年度 トレンド・マクロ補正 ===\n")
 
-    pred_path = f"data/prediction_{args.year}.csv"
+    pred_path = f"data/05out_prediction_{args.year}.csv"
     if not os.path.exists(pred_path):
         print(f"エラー: {pred_path} がありません。先に 05_predict_2026.py を実行してください。")
         return
@@ -213,8 +216,8 @@ def main():
             out_df[col] = (out_df[col].values * trend_factor
                            * (macro_factor if adjustments else 1.0)).round(0).astype(int)
 
-    out_path = f"data/prediction_adjusted_{args.year}.csv"
-    sum_path = f"data/prediction_adjusted_summary_{args.year}.csv"
+    out_path = f"data/06out_prediction_adjusted_{args.year}.csv"
+    sum_path = f"data/06out_prediction_adjusted_summary_{args.year}.csv"
 
     out_df.to_csv(out_path, index=False, encoding="utf-8-sig")
 

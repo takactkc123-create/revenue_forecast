@@ -15,15 +15,15 @@ tax_reform_config.csv の feature_correction を適用して税制改正を特�
   python 05_predict_2026.py --wage-delta 0.013  # 実績トレンド + 1.3%
 
 【import】
-  data/individual_prepared.csv   ← 03 の出力
-  models/lgbm_model.txt          ← 04 の出力
-  models/model_config.json       ← 04 の出力
-  config.py                      ← モデル設定（特徴量・パラメータ・学習年・テスト年）
-  tax_reform_config.csv          ← 税制改正設定ファイル
+  data/03out_individual_prepared.csv  ← 03 の出力
+  models/lgbm_model.txt               ← 04 の出力
+  models/model_config.json            ← 04 の出力
+  config.py                           ← モデル設定（特徴量・パラメータ・学習年・テスト年）
+  tax_reform_config.csv               ← 税制改正設定ファイル
 
 【export】
-  data/prediction_YYYY.csv       ← 個人別予測値（信頼区間付き）
-  data/prediction_summary_YYYY.csv ← 合計・信頼区間サマリー
+  data/05out_prediction_YYYY.csv          ← 個人別予測値（信頼区間付き）
+  data/05out_prediction_summary_YYYY.csv  ← 合計・信頼区間サマリー
 
 
 """
@@ -31,9 +31,12 @@ tax_reform_config.csv の feature_correction を適用して税制改正を特�
 import argparse
 import json
 import os
+import sys
 import numpy as np
 import pandas as pd
 import lightgbm as lgb
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "00_src_settings"))
 from tax_reform import (
     load_reforms, apply_reforms, print_reform_summary,
     compute_salary_income, compute_basic_deduction,
@@ -361,6 +364,8 @@ def main():
         print(f"  税制改正補正効果           : {reform_effect:>+8.2f} 億円")
     print(f"  {args.year}年度 課税合計（最終）: {total_oku:>8.2f} 億円  ({diff/last_year_total*100:>+.2f}%)")
     print(f"  予測人員                   : {len(pred_df_out):>8,} 人")
+    n_taxable = int((pred_tax != 0).sum())  # 2026-09-09追加: 非課税者を除いた課税者数
+    print(f"  うち課税者数（非課税除く）  : {n_taxable:>8,} 人")
     total_lower = pred_tax_lower.sum() / 1e8
     total_upper = pred_tax_upper.sum() / 1e8
     print(f"  {CONFORMAL_COVERAGE*100:.0f}%信頼区間 [{total_lower:.2f} 〜 {total_upper:.2f}] 億円")
@@ -388,8 +393,8 @@ def main():
     out_df[f"pred_tax_lower_{int(CONFORMAL_COVERAGE*100)}"] = pred_tax_lower
     out_df[f"pred_tax_upper_{int(CONFORMAL_COVERAGE*100)}"] = pred_tax_upper
 
-    out_path = f"data/prediction_{args.year}.csv"
-    sum_path = f"data/prediction_summary_{args.year}.csv"
+    out_path = f"data/05out_prediction_{args.year}.csv"
+    sum_path = f"data/05out_prediction_summary_{args.year}.csv"
 
     out_df.to_csv(out_path, index=False, encoding="utf-8-sig")
     pd.DataFrame([{
@@ -401,6 +406,7 @@ def main():
         "前年比_億円"     : round(diff, 2),
         "前年比率_%"      : round(diff / last_year_total * 100, 2),
         "予測人員"        : len(out_df),
+        "課税者数"        : n_taxable,  # 2026-09-09追加: 非課税者を除いた課税者数
         "適用補正数"      : len(feature_reforms),
         "適用補正名"      : "|".join(r["name"] for r in feature_reforms) if feature_reforms else "なし",
     }]).to_csv(sum_path, index=False, encoding="utf-8-sig")

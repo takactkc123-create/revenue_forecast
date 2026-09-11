@@ -6,12 +6,12 @@
 04〜06 の出力を読み込み、以下のグラフを生成して results/ フォルダに保存する。
 
 【グラフ一覧】
-  1. 年度別合算精度（実測 vs 予測）      ← 04 の yearly_result.csv
-  2. 個人税額の誤差分布（ヒストグラム）  ← 04 の val_result.csv
-  3. 予測税額の年齢区分別内訳（棒グラフ）← 05 の prediction_YYYY.csv
+  1. 年度別合算精度（実測 vs 予測）      ← 04 の 04out_yearly_result.csv
+  2. 個人税額の誤差分布（ヒストグラム）  ← 04 の 04out_val_result.csv
+  3. 予測税額の年齢区分別内訳（棒グラフ）← 05 の 05out_prediction_YYYY.csv
   4. 最終予測サマリー（補正前後の比較）  ← 05/06 の summary CSV
   5. 評価指標ダッシュボード（テーブル + 年度別誤差率）← 04 の val/yearly CSV
-  6. 信頼区間分布（幅のヒストグラム + 年齢区分別箱ひげ図）← 05 の prediction_YYYY.csv
+  6. 信頼区間分布（幅のヒストグラム + 年齢区分別箱ひげ図）← 05 の 05out_prediction_YYYY.csv
 
 【使い方】
   python 07_visualize.py
@@ -22,21 +22,24 @@
 import argparse
 import json
 import os
+import sys
 import numpy as np
 import pandas as pd
 import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 from matplotlib.patches import Patch
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "00_src_settings"))
 from config import PREDICT_YEAR
 
 matplotlib.rcParams["font.family"] = ["MS Gothic", "Hiragino Sans", "DejaVu Sans"]
 matplotlib.rcParams["axes.unicode_minus"] = False
 
 RESULTS_DIR  = "05_results"
-YEARLY_PATH  = "data/yearly_result.csv"
-VAL_PATH     = "data/val_result.csv"
-WF_PATH      = "data/walkforward_result_04.csv"
+YEARLY_PATH  = "data/04out_yearly_result.csv"
+VAL_PATH     = "data/04out_val_result.csv"
+WF_PATH      = "data/04out_walkforward_result.csv"
 MC_PATH      = "models/model_config.json"
 
 AGE_ORDER = [
@@ -159,8 +162,8 @@ def fig3_age_breakdown(pred_df: pd.DataFrame, year: int, show: bool):
 
 def fig4_prediction_summary(year: int, show: bool):
     """予測サマリー: 信頼区間つき予測値の図示（上段）+ 数値テーブル（下段）"""
-    sum_path = f"data/prediction_summary_{year}.csv"
-    adj_path = f"data/prediction_adjusted_summary_{year}.csv"
+    sum_path = f"data/05out_prediction_summary_{year}.csv"
+    adj_path = f"data/06out_prediction_adjusted_summary_{year}.csv"
 
     if not os.path.exists(sum_path):
         print("  summary CSV なし → fig4 スキップ")
@@ -173,6 +176,7 @@ def fig4_prediction_summary(year: int, show: bool):
     prev_act = float(s["前年実績_億円"])
     pct_chg  = float(s["前年比率_%"])
     n_people = int(s["予測人員"])
+    n_taxable = int(s["課税者数"]) if "課税者数" in s.index else None  # 2026-09-09追加
 
     final_adj = None
     if os.path.exists(adj_path):
@@ -242,6 +246,8 @@ def fig4_prediction_summary(year: int, show: bool):
         ["高い見積もり（上限）", f"{ci_high:.2f} 億円",  "95%信頼区間の上限"],
         ["予測人員",            f"{n_people:,} 人",     f"{year}年度 推計"],
     ]
+    if n_taxable is not None:  # 2026-09-09追加: 非課税者を除いた課税者数
+        table_data.append(["うち課税者数（非課税除く）", f"{n_taxable:,} 人", f"{year}年度 推計"])
     if final_adj is not None:
         table_data.insert(4, ["補正後最終値", f"{final_adj:.2f} 億円", "06 マクロ補正後"])
 
@@ -350,8 +356,8 @@ def fig5_metrics_dashboard(val_df: pd.DataFrame, yearly_df: pd.DataFrame, show: 
 
 def fig6_tax_timeseries(yearly_df: pd.DataFrame, year: int, show: bool):
     """税収時系列グラフ: 2020〜前年の実績 + 予測年の予測値（95%信頼区間つき）"""
-    sum_path = f"data/prediction_summary_{year}.csv"
-    adj_path = f"data/prediction_adjusted_summary_{year}.csv"
+    sum_path = f"data/05out_prediction_summary_{year}.csv"
+    adj_path = f"data/06out_prediction_adjusted_summary_{year}.csv"
 
     if not os.path.exists(sum_path):
         print("  summary CSV なし → fig6 スキップ")
@@ -369,7 +375,7 @@ def fig6_tax_timeseries(yearly_df: pd.DataFrame, year: int, show: bool):
         if "最終予測合計_億円" in a.index:
             pred_val = float(a["最終予測合計_億円"])
 
-    # 実績系列（yearly_result.csv の actual_oku）
+    # 実績系列（04out_yearly_result.csv の actual_oku）
     hist_years = yearly_df["year"].tolist()
     hist_vals  = yearly_df["actual_oku"].tolist()
     all_years  = hist_years + [year]
@@ -621,7 +627,7 @@ def main():
     else:
         print(f"  {VAL_PATH} なし → Fig2 スキップ")
 
-    pred_path = f"data/prediction_{args.year}.csv"
+    pred_path = f"data/05out_prediction_{args.year}.csv"
     pred_df   = None
     if os.path.exists(pred_path):
         print(f"Fig3: 年齢区分別内訳（{args.year}年）")
@@ -637,7 +643,7 @@ def main():
         print("Fig5: 評価指標ダッシュボード")
         fig5_metrics_dashboard(val_df, yearly_df, show)
     else:
-        print("  val_result.csv / yearly_result.csv なし → Fig5 スキップ")
+        print("  04out_val_result.csv / 04out_yearly_result.csv なし → Fig5 スキップ")
 
     if yearly_df is not None:
         print(f"Fig6: 税収時系列グラフ（〜{args.year}年）")

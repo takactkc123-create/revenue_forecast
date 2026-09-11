@@ -13,34 +13,37 @@ tax_reform_config.csv の label_correction を適用してから学習する。
   python 04_model_train.py --walkforward     # ウォークフォワード検証 + 標準最終モデル
         -> フォールド別精度確認後、同じ最終モデル（TRAIN_YEARS）を保存
   python 04_model_train.py --retrain-all     # ウォークフォワード検証 + 全年度再学習
-        -> フォールド別精度確認 → fold4 を val_result.csv に保存（TRAIN_YEARS + TEST_YEAR 全年度で再学習して保存)
+        -> フォールド別精度確認 → fold4 を 04out_val_result.csv に保存（TRAIN_YEARS + TEST_YEAR 全年度で再学習して保存)
   python 04_model_train.py --walkforward --min-train 3  # 最小訓練年数を変更
 
 【import】
-  data/individual_prepared.csv  ← 03_feature_eng.py の出力
-  config.py                     ← モデル設定（特徴量・パラメータ・学習年・テスト年）
-  tax_reform_config.csv         ← 税制改正設定ファイル
+  data/03out_individual_prepared.csv  ← 03_feature_eng.py の出力
+  config.py                           ← モデル設定（特徴量・パラメータ・学習年・テスト年）
+  tax_reform_config.csv               ← 税制改正設定ファイル
 
 【export】
   models/lgbm_model.txt              ← LightGBM モデルファイル
   models/model_config.json           ← 特徴量・パラメータ設定（05 が参照）
-  data/val_result.csv                ← 個人別予測 vs 実測（TEST_YEAR の out-of-sample）
-  data/yearly_result.csv             ← 年度別合算精度
-  data/walkforward_result_04.csv     ← walkforward / retrain_all モード時のみ出力
+  data/04out_val_result.csv          ← 個人別予測 vs 実測（TEST_YEAR の out-of-sample）
+  data/04out_yearly_result.csv       ← 年度別合算精度
+  data/04out_walkforward_result.csv  ← walkforward / retrain_all モード時のみ出力
 
 【定額減税（2024年）の扱い】
   teigaku_reduction は active=False に設定済み。
   実データを投入する際は、2024年の税額を定額減税前の水準に加工してから
-  individual_raw.csv に配置する。モデル内での補正は行わない。
+  01out_individual_raw.csv に配置する。モデル内での補正は行わない。
 """
 
 import argparse
 import json
 import os
+import sys
 import numpy as np
 import pandas as pd
 import lightgbm as lgb
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "00_src_settings"))
 from tax_reform import load_reforms, apply_reforms, print_reform_summary, compute_non_taxable_flag
 from config import (
     PREPARED_DATA_PATH, MODEL_DIR, MODEL_PATH, MODEL_CONFIG_PATH,
@@ -49,9 +52,9 @@ from config import (
     VALIDATION_MODE, WF_MIN_TRAIN_YEARS,
 )
 
-VAL_PATH    = "data/val_result.csv"
-YEARLY_PATH = "data/yearly_result.csv"
-WF_PATH     = "data/walkforward_result_04.csv"
+VAL_PATH    = "data/04out_val_result.csv"
+YEARLY_PATH = "data/04out_yearly_result.csv"
+WF_PATH     = "data/04out_walkforward_result.csv"
 
 
 # ─── 精度指標 ──────────────────────────────────────────────────────────────────
@@ -226,7 +229,7 @@ def main():
     os.makedirs(MODEL_DIR, exist_ok=True)
     print(f"=== 04: モデル学習・時系列検証  [{mode}モード] ===\n")
 
-    ## config.py から PREPARED_DATA_PATH = "data/individual_prepared.csv"
+    ## config.py から PREPARED_DATA_PATH = "data/03out_individual_prepared.csv"
     print(f"データ読込: {PREPARED_DATA_PATH}") 
     df = pd.read_csv(PREPARED_DATA_PATH, encoding="utf-8-sig")
     print(f"  {len(df):,} 件 / {df['year'].nunique()} 年分\n")
@@ -355,7 +358,7 @@ def main():
 
     show_feature_importance(model, feat_cols)
 
-    # ── val_result.csv の保存 ─────────────────────────────────────────────────
+    # ── 04out_val_result.csv の保存 ───────────────────────────────────────────
     if mode == "retrain_all" and not last_fold_preds.empty:
         ## fold4 の out-of-sample 予測をそのまま保存
         last_fold_preds.to_csv(VAL_PATH, index=False, encoding="utf-8-sig")
@@ -371,7 +374,7 @@ def main():
 
     # ── CSV・モデル保存 ──────────────────────────────────────────────────────
     
-    ## 04_model_train.py で定義 : YEARLY_PATH = "data/yearly_result.csv"
+    ## 04_model_train.py で定義 : YEARLY_PATH = "data/04out_yearly_result.csv"
     ## data の フィールドは yearly_rows で設定
     pd.DataFrame(yearly_rows).to_csv(YEARLY_PATH, index=False, encoding="utf-8-sig")
 

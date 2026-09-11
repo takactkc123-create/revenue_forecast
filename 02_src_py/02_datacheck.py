@@ -9,6 +9,8 @@ import matplotlib_fontja
 import seaborn as sns
 import warnings
 warnings.filterwarnings("ignore")
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "00_src_settings"))
 from tax_reform import compute_income_tax_rate
 
 print("Python version:", sys.version)
@@ -18,7 +20,7 @@ print("Python version:", sys.version)
 # %%
 
 # データ読み込み
-df = pd.read_csv("data/individual_raw.csv", encoding="utf-8-sig")
+df = pd.read_csv("data/01out_individual_raw.csv", encoding="utf-8-sig")
 df.head()
 print(df.columns)
 print(df.dtypes)
@@ -35,6 +37,39 @@ df["年齢区分"] = pd.cut(df["年齢"], bins=bins, labels=labels, right=False)
 '''
 SAVE_DIR = "04_datacheck"
 
+
+
+# %%
+# --- fig0 : 課税・非課税割合（年度別） 2026-09-09追加 -------------------------------------
+def plot_taxable_ratio_by_year(df, show: bool = False):
+    """
+    tax_amount が 0円（非課税）か非0円（課税）かの人数を年度別に棒グラフで比較する。
+    """
+    years = sorted(df["year"].unique())
+    fig, axes = plt.subplots(2, 3, figsize=(12, 6))
+    axes = axes.flatten()
+
+    for i, year in enumerate(years):
+        df_year = df[df["year"] == year]
+        counts = [
+            (df_year["tax_amount"] == 0).sum(),
+            (df_year["tax_amount"] != 0).sum(),
+        ]
+        axes[i].bar(["非課税", "課税"], counts)
+        axes[i].set_title(f"{year}年度")
+        axes[i].set_ylabel("人数")
+        for j, c in enumerate(counts):
+            axes[i].text(j, c, f"{c:,}", ha="center", va="bottom")
+
+    fig.suptitle("課税・非課税 人数比較")
+
+    plt.tight_layout()
+    path = os.path.join(SAVE_DIR, "fig0_taxable_ratio_by_year.png")
+    plt.savefig(path, dpi=150)
+    print(f"  → {path}")
+    if show:
+        plt.show()
+    plt.close()
 
 
 # %%
@@ -638,6 +673,9 @@ def plot_salary_income_yearly(df, gross_col="income_salary_gross", net_col="inco
 
 # ─── メイン ───────────────────────────────────────────────────────────────────
 def main():
+    # --- fig0 : 課税・非課税割合（年度別） 2026-09-09追加
+    plot_taxable_ratio_by_year(df)
+
     # --- fig1 : histgram
     plot_hist_by_year(df, "income_salary_gross")
     plot_hist_by_year(df, "income_pension_gross")

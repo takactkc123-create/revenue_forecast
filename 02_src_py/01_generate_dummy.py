@@ -15,12 +15,15 @@
   tax_reform.py（所得控除・課税所得計算関数）
 
 【export】
-  data/individual_raw.csv  ← 03_feature_eng.py にて import 
+  data/01out_individual_raw.csv  ← 03_feature_eng.py にて import
 """
 import argparse
 import os
+import sys
 import numpy as np
 import pandas as pd
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "00_src_settings"))
 from tax_reform import (
     compute_salary_income,
     compute_pension_income,
