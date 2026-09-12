@@ -25,15 +25,34 @@
   python 06_trend_correction.py --year 2026
   python 06_trend_correction.py --no-trend   # トレンド補正をスキップ
   python 06_trend_correction.py --factor 0.98  # トレンド補正乗率を直接指定
+
+【人口減少（死亡・転出）を反映したいとき → --factor を使う】 2026-09-12追記
+  05 は「予測年の対象者 ＝ 直近年の対象者そのまま」という前提で予測する
+  （05 の estimate_next_year() が直近年のレコードをコピーして所得だけ伸ばすため、
+   死亡・転出による減少も転入による増加も反映されない）。
+  このため人口が減少している自治体では予測が過大になる。その分を打ち消すには
+  --factor に「1 − 想定減少率」を渡す。
+
+    python 06_trend_correction.py --factor 0.988   # 対象者が年1.2%減る想定
+    python 06_trend_correction.py --factor 0.995   # 年0.5%減る想定
+
+  乗率は個人別予測値と信頼区間の両方に一律で掛かる。
+  根拠値は実データなら「前年にいたIDのうち翌年消えた割合 −  新規に現れたIDの割合」
+  （＝消滅率と新規率の差引き）から算出できる。
+
+  ※ 引数なしで実行したときの自動算出（compute_trend_factor）は、04 の訓練年の
+    予測誤差＝モデルの系統的なズレを打ち消すものであり、人口動態は一切見ていない。
+    訓練年の誤差が小さいと乗率は 1.0 になり「補正なし」となる点に注意。
+  ※ tax_reform_config.csv の macro_correction に人口減少の行を追加しても効かない
+    （apply_macro_reforms が扱うのは dependent_income_limit /
+     special_dependent_allowance の2つのみ。それ以外は「未実装」警告を出して無視する）。
 """
 
 import argparse
 import os
-import sys
 import numpy as np
 import pandas as pd
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "00_src_settings"))
 from tax_reform import load_reforms, print_reform_summary
 from config import (
     PREPARED_DATA_PATH, REFORM_CONFIG_PATH,

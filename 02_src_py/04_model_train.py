@@ -37,13 +37,11 @@ tax_reform_config.csv の label_correction を適用してから学習する。
 import argparse
 import json
 import os
-import sys
 import numpy as np
 import pandas as pd
 import lightgbm as lgb
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "00_src_settings"))
 from tax_reform import load_reforms, apply_reforms, print_reform_summary, compute_non_taxable_flag
 from config import (
     PREPARED_DATA_PATH, MODEL_DIR, MODEL_PATH, MODEL_CONFIG_PATH,

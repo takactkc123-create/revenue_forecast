@@ -19,11 +19,9 @@
 """
 import argparse
 import os
-import sys
 import numpy as np
 import pandas as pd
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "00_src_settings"))
 from tax_reform import (
     compute_salary_income,
     compute_pension_income,
@@ -66,17 +64,18 @@ def _generate_ages(rng: np.random.Generator, n: int) -> np.ndarray:
 def _age_to_group(ages: np.ndarray) -> np.ndarray:
     """実年齢の配列から年齢区分ラベル（'20-24' 等）の配列を返す。"""
     ages = np.asarray(ages)
+    # 2026-09-12変更: 旧「80以上」を 80-84 / 85-89 / 90over の3区分に分割
     conditions = [
         ages < 25, ages < 30, ages < 35, ages < 40, ages < 45,
         ages < 50, ages < 55, ages < 60, ages < 65, ages < 70,
-        ages < 75, ages < 80,
+        ages < 75, ages < 80, ages < 85, ages < 90,
     ]
     choices = [
         "20-24", "25-29", "30-34", "35-39", "40-44",
         "45-49", "50-54", "55-59", "60-64", "65-69",
-        "70-74", "75-79",
+        "70-74", "75-79", "80-84", "85-89",
     ]
-    return np.select(conditions, choices, default="80以上")
+    return np.select(conditions, choices, default="90over")
 
 
 def _spouse_special_deduction(income_total: np.ndarray, has_spouse_special: np.ndarray) -> np.ndarray:

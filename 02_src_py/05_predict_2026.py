@@ -31,12 +31,10 @@ tax_reform_config.csv の feature_correction を適用して税制改正を特�
 import argparse
 import json
 import os
-import sys
 import numpy as np
 import pandas as pd
 import lightgbm as lgb
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "00_src_settings"))
 from tax_reform import (
     load_reforms, apply_reforms, print_reform_summary,
     compute_salary_income, compute_basic_deduction,

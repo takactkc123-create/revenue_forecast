@@ -10,7 +10,6 @@ import seaborn as sns
 import warnings
 warnings.filterwarnings("ignore")
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "00_src_settings"))
 from tax_reform import compute_income_tax_rate
 
 print("Python version:", sys.version)
@@ -139,10 +138,11 @@ def plot_log_hist_by_year(df, col, xticks, xlabels, show: bool = False):
 # categorical columns
 ## 年齢区分の順序を定義(昇順)
 def _age_order(df):
-    """age_group の昇順リストを返す（"80以上" も正しく最後に来る）"""
+    """age_group の昇順リストを返す（"90over" / "80以上" も正しく最後に来る）"""
+    # 2026-09-12変更: 区分を 80-84/85-89/90over に分割したため "over" 表記にも対応
     return sorted(
         df["age_group"].unique(),
-        key=lambda x: int(x.replace("以上", "").split("-")[0])
+        key=lambda x: int(x.replace("以上", "").replace("over", "").split("-")[0])
     )
 
 # 性別カラー定義（男性=青, 女性=ピンク）。gender列のhue分けで共通利用する

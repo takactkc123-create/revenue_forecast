@@ -59,7 +59,9 @@
 
 ## 実行方法
 
-`config.py`・`tax_reform.py`は`00_src_settings/`に、実行スクリプト本体は`02_src_py/`に置かれている。`02_src_py/`配下の各スクリプトは自身の場所から`00_src_settings/`への絶対パスを実行時に`sys.path`へ追加してから`import`するため、`PYTHONPATH`の設定は不要である。ただし`data/`等への相対パスはカレントディレクトリ基準のため、**プロジェクトルートから実行すること**。
+`config.py`・`tax_reform.py`は、実行スクリプト本体と同じ`02_src_py/`に置いている（**こちらが原本**）。スクリプトは同一フォルダのモジュールをそのまま`import`するため、`PYTHONPATH`の設定も`sys.path`の操作も不要である。ただし`data/`等への相対パスはカレントディレクトリ基準のため、**プロジェクトルートから実行すること**。
+
+なお`03_notebooks/`にも同じ`config.py`・`tax_reform.py`を配置している（Notebook単体で読めるようにするための公開用コピー）。**設定値を変更するときは原本の`02_src_py/config.py`を編集し、`03_notebooks/config.py`へコピーして同期すること。**
 
 ```bash
 # 実データがある場合（03から開始）
@@ -96,14 +98,13 @@ Windows PowerShellでも同じコマンドがそのまま使える（`PYTHONPATH
 
 ```
 .
-├── 00_src_settings/
-│   ├── config.py                 # 全設定値の一元管理（ここだけ触ればパラメータ調整可能）
-│   └── tax_reform.py             # 税制改正補正ロジック（共通モジュール）
-│
 ├── 01_src_sql/
 │   └── 00_CsvCreate.sql          # 基幹系DBからの実データ抽出SQL
 │
 ├── 02_src_py/                    # 実行スクリプト本体（CLI版。プロジェクトルートから実行）
+│   ├── config.py                 # 【原本】全設定値の一元管理（ここだけ触ればパラメータ調整可能）
+│   ├── tax_reform.py             # 【原本】税制改正補正ロジック（共通モジュール）
+│   │
 │   ├── 01_generate_dummy.py      # ダミーデータ生成
 │   │     in  : config.pyの設定値
 │   │     out : data/01out_individual_raw.csv
@@ -134,7 +135,10 @@ Windows PowerShellでも同じコマンドがそのまま使える（`PYTHONPATH
 │         in  : 04〜06の出力CSV群, models/model_config.json
 │         out : 05_results/*.png
 │
-├── 03_notebooks/                 # 上記と同一ロジックのNotebook版（探索的な実行・確認用）
+├── 03_notebooks/                 # 上記と同一ロジックのNotebook版（公開・閲覧用）
+│   ├── config.py                 # 02_src_py/config.py のコピー（編集は原本側で行い、ここへ同期）
+│   ├── tax_reform.py             # 02_src_py/tax_reform.py のコピー（同上）
+│   │
 │   ├── 01_generate_dummy.ipynb
 │   ├── 02_datacheck.ipynb
 │   ├── 03_feature_eng.ipynb
@@ -162,7 +166,7 @@ Windows PowerShellでも同じコマンドがそのまま使える（`PYTHONPATH
     └── model_config.json         # 特徴量・パラメータ・検証モード記録
 ```
 
-> `data/`・`models/`はダミー・実データ両方の運用で共通して使われる作業用フォルダのため、GitHubには公開していない（`.gitignore`対象）。GitHub上のフォルダ表示順（`00_src_settings`〜`05_results`）は、アルファベット順にしか並ばないGitHubの仕様に合わせて連番を振ったものであり、共通設定→パイプラインの処理順（SQL抽出→スクリプト→Notebook→EDA→最終成果物）と一致させている。
+> `data/`・`models/`はダミー・実データ両方の運用で共通して使われる作業用フォルダのため、GitHubには公開していない（`.gitignore`対象）。GitHub上のフォルダ表示順（`01_src_sql`〜`05_results`）は、アルファベット順にしか並ばないGitHubの仕様に合わせて連番を振ったものであり、パイプラインの処理順（SQL抽出→スクリプト→Notebook→EDA→最終成果物）と一致させている。
 
 ---
 

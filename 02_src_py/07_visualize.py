@@ -22,7 +22,6 @@
 import argparse
 import json
 import os
-import sys
 import numpy as np
 import pandas as pd
 import matplotlib
@@ -30,7 +29,6 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 from matplotlib.patches import Patch
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "00_src_settings"))
 from config import PREDICT_YEAR
 
 matplotlib.rcParams["font.family"] = ["MS Gothic", "Hiragino Sans", "DejaVu Sans"]
@@ -42,9 +40,11 @@ VAL_PATH     = "data/04out_val_result.csv"
 WF_PATH      = "data/04out_walkforward_result.csv"
 MC_PATH      = "models/model_config.json"
 
+# 2026-09-12変更: 旧「80以上」を 80-84 / 85-89 / 90over の3区分に分割（config.py と対応）
 AGE_ORDER = [
     "20-24", "25-29", "30-34", "35-39", "40-44", "45-49",
-    "50-54", "55-59", "60-64", "65-69", "70-74", "75-79", "80以上",
+    "50-54", "55-59", "60-64", "65-69", "70-74", "75-79",
+    "80-84", "85-89", "90over",
 ]
 
 
@@ -142,6 +142,8 @@ def fig3_age_breakdown(pred_df: pd.DataFrame, year: int, show: bool):
     ax.set_ylabel("合計税額（億円）")
     ax.set_title(f"{year}年度 年齢区分別 合計税額")
     ax.grid(axis="y", alpha=0.4)
+    # 2026-09-12追加: 年齢区分が15個に増えてラベルが重なるため回転させる
+    ax.tick_params(axis="x", labelrotation=45, labelsize=9)
 
     ax2 = axes[1]
     bars2 = ax2.bar(summary.index, summary["人員"] / 1e4, color="coral", alpha=0.85)
@@ -150,6 +152,7 @@ def fig3_age_breakdown(pred_df: pd.DataFrame, year: int, show: bool):
     ax2.set_ylabel("納税人員（万人）")
     ax2.set_title(f"{year}年度 年齢区分別 人員")
     ax2.grid(axis="y", alpha=0.4)
+    ax2.tick_params(axis="x", labelrotation=45, labelsize=9)
 
     plt.tight_layout()
     path = os.path.join(RESULTS_DIR, f"fig3_age_breakdown_{year}.png")
