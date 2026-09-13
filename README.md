@@ -515,13 +515,13 @@ uv run python 02_src_py/06_trend_correction.py --factor 1.005   # 対象者が�
 
 | グラフ | ファイル名 | 内容 |
 |---|---|---|
-| Fig1 | `fig1_yearly_accuracy.png` | 年度別：実測 vs 予測 折れ線 |
-| Fig2 | `fig2_error_distribution.png` | 個人税額誤差のヒストグラム |
-| Fig3 | `fig3_age_breakdown_2026.png` | 年齢区分別の合計税額・人員（棒グラフ） |
-| Fig4 | `fig4_summary_2026.png` | 予測中央値・低い見積もり・高い見積もり（95%信頼区間）＋数値テーブル |
-| Fig5 | `fig5_metrics_dashboard.png` | WMAPE・RMSE 等の評価指標テーブル＋年度別誤差率棒グラフ |
-| Fig6 | `fig6_tax_timeseries_2026.png` | 2020〜前年度の実績推移＋予測年度の予測値・95%信頼区間を重ねた時系列グラフ |
-| Fig7 | `fig7_walkforward_report.png` | walk-forward各フォールドの精度テーブル＋誤差率棒グラフ（`--walkforward`/`--retrain-all`時のみ出力） |
+| Fig1 | `fig1_年度別_実測と予測.png` | 年度別：実測 vs 予測 折れ線 |
+| Fig2 | `fig2_予測誤差の分布.png` | 個人税額誤差のヒストグラム |
+| Fig3 | `fig3_年齢区分別_税額と人員_2026.png` | 年齢区分別の合計税額・人員（棒グラフ） |
+| Fig4 | `fig4_予測結果サマリー_2026.png` | 予測中央値・低い見積もり・高い見積もり（95%信頼区間）＋数値テーブル |
+| Fig5 | `fig5_評価指標.png` | WMAPE・RMSE 等の評価指標テーブル＋年度別誤差率棒グラフ |
+| Fig6 | `fig6_税収推移と予測_2026.png` | 2020〜前年度の実績推移＋予測年度の予測値・95%信頼区間を重ねた時系列グラフ |
+| Fig7 | `fig7_時系列検証_フォールド別精度.png` | walk-forward各フォールドの精度テーブル＋誤差率棒グラフ（`--walkforward`/`--retrain-all`時のみ出力） |
 
 出力先は`05_results/`。
 

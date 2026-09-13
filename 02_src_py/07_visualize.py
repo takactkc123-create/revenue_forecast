@@ -72,7 +72,7 @@ def fig1_yearly_accuracy(yearly_df: pd.DataFrame, show: bool):
     ax.legend()
     ax.grid(axis="y", alpha=0.4)
     plt.tight_layout()
-    path = os.path.join(RESULTS_DIR, "fig1_yearly_accuracy.png")
+    path = os.path.join(RESULTS_DIR, "fig1_年度別_実測と予測.png")
     plt.savefig(path, dpi=150)
     print(f"  → {path}")
     if show:
@@ -113,7 +113,7 @@ def fig2_error_distribution(val_df: pd.DataFrame, show: bool):
     ax2.grid(axis="y", alpha=0.4)
 
     plt.tight_layout()
-    path = os.path.join(RESULTS_DIR, "fig2_error_distribution.png")
+    path = os.path.join(RESULTS_DIR, "fig2_予測誤差の分布.png")
     plt.savefig(path, dpi=150)
     print(f"  → {path}")
     if show:
@@ -155,7 +155,7 @@ def fig3_age_breakdown(pred_df: pd.DataFrame, year: int, show: bool):
     ax2.tick_params(axis="x", labelrotation=45, labelsize=9)
 
     plt.tight_layout()
-    path = os.path.join(RESULTS_DIR, f"fig3_age_breakdown_{year}.png")
+    path = os.path.join(RESULTS_DIR, f"fig3_年齢区分別_税額と人員_{year}.png")
     plt.savefig(path, dpi=150)
     print(f"  → {path}")
     if show:
@@ -270,7 +270,7 @@ def fig4_prediction_summary(year: int, show: bool):
         tbl[(3, j)].set_facecolor("#ddeeff")
 
     plt.tight_layout()
-    path = os.path.join(RESULTS_DIR, f"fig4_summary_{year}.png")
+    path = os.path.join(RESULTS_DIR, f"fig4_予測結果サマリー_{year}.png")
     plt.savefig(path, dpi=150)
     print(f"  → {path}")
     if show:
@@ -349,7 +349,7 @@ def fig5_metrics_dashboard(val_df: pd.DataFrame, yearly_df: pd.DataFrame, show: 
     ])
 
     plt.tight_layout()
-    path = os.path.join(RESULTS_DIR, "fig5_metrics_dashboard.png")
+    path = os.path.join(RESULTS_DIR, "fig5_評価指標.png")
     plt.savefig(path, dpi=150)
     print(f"  → {path}")
     if show:
@@ -437,7 +437,7 @@ def fig6_tax_timeseries(yearly_df: pd.DataFrame, year: int, show: bool):
     ax.grid(axis="y", alpha=0.4)
     plt.tight_layout()
 
-    path = os.path.join(RESULTS_DIR, f"fig6_tax_timeseries_{year}.png")
+    path = os.path.join(RESULTS_DIR, f"fig6_税収推移と予測_{year}.png")
     plt.savefig(path, dpi=150)
     print(f"  → {path}")
     if show:
@@ -595,7 +595,7 @@ def fig7_walkforward_report(yearly_df: pd.DataFrame, val_df: pd.DataFrame | None
     ax2.grid(axis="y", alpha=0.4)
 
     plt.tight_layout(rect=[0, 0.0, 1, 0.95])
-    path = os.path.join(RESULTS_DIR, "fig7_walkforward_report.png")
+    path = os.path.join(RESULTS_DIR, "fig7_時系列検証_フォールド別精度.png")
     plt.savefig(path, dpi=150)
     print(f"  → {path}")
     if show:
