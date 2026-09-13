@@ -109,6 +109,60 @@ def _cumulative_factor(rates: dict, year: int) -> float:
     return f
 
 
+def _gen_non_salary_incomes(rng, n, age_arr):
+    """給与以外の所得を生成して dict で返す（初年度・新規加入者で共通。分布・確率は従来の初年度と同じ）。
+
+    2026-09-13 関数化: 従来は初年度のみこの分布で生成し、新規加入者は全て0円固定だった。
+    """
+    inc = {}
+    # 事業・不動産・配当・雑所得（年齢非依存、国税庁R4参考）
+    # 2026-09-13修正: rng.normal に size を指定。未指定だと乱数が1つしか引かれず、保有者全員が同額になっていた
+    inc["income_business"] = np.where(rng.random(n) < 0.12, rng.normal(4_728_000, 3_000_000, n), 0.0)
+    inc["income_property"] = np.where(rng.random(n) < 0.06, rng.normal(5_425_000, 3_500_000, n), 0.0)
+    # 事業所得・不動産所得は正規分布のためマイナス（赤字＝損失）の人も生成されるが、損失を表すものとして許容する（2026-09-13 判断）
+    inc["income_dividend"] = _gen_rare(rng, n, 0.10, 200_000, 250_000).astype(float)
+    inc["income_other"]    = _gen_rare(rng, n, 0.05, 100_000, 200_000).astype(float)
+
+    # ── 公的年金等収入（厚生労働省R5概況: 国民年金平均＋厚生年金平均の合計。1万円単位）
+    # 保険会社の集計結果より設定
+    _pension_mu = np.select(
+        [(age_arr >= 60) & (age_arr < 65),
+         (age_arr >= 65) & (age_arr < 70),
+         (age_arr >= 70) & (age_arr < 75),
+         (age_arr >= 75) & (age_arr < 80),
+         age_arr >= 80],
+        [1_450_000, 2_480_000, 2_440_000, 2_470_000, 2_590_000],
+        default=0,
+    ).astype(float)
+    inc["income_pension_gross"] = np.where(
+        age_arr < 60, 0.0,
+        np.maximum(0.0, rng.normal(_pension_mu, np.maximum(_pension_mu * 0.30, 1.0))),
+    )
+    # 年金所得を収入から計算（65歳境界で控除額の計算式が変わる）
+    inc["income_pension"] = compute_pension_income(inc["income_pension_gross"], age_arr).round(0).astype(int)
+
+    # 農業・利子・業務雑所得・総合譲渡・一時所得（低頻度。ベクトル化生成）
+    inc["income_farming"]       = _gen_rare(rng, n, 0.015, 500_000,   400_000)
+    inc["income_interest"]      = _gen_rare(rng, n, 0.060, 30_000,    50_000)
+    inc["income_misc_business"] = _gen_rare(rng, n, 0.040, 200_000,   300_000)
+    inc["income_stcg"]          = _gen_rare(rng, n, 0.010, 500_000,   800_000)
+    inc["income_ltcg"]          = _gen_rare(rng, n, 0.020, 800_000,   1_000_000)
+    inc["income_occasional"]    = _gen_rare(rng, n, 0.010, 200_000,   300_000)
+
+    # 分離課税所得（繰越控除後のため非負。高所得層中心で低確率）
+    inc["sep_stcg_general"]    = _gen_rare(rng, n, 0.003, 1_000_000, 2_000_000)
+    inc["sep_stcg_reduced"]    = _gen_rare(rng, n, 0.002, 800_000,   1_500_000)
+    inc["sep_ltcg_general"]    = _gen_rare(rng, n, 0.015, 2_000_000, 3_000_000)
+    inc["sep_ltcg_specific"]   = _gen_rare(rng, n, 0.008, 3_000_000, 5_000_000)
+    inc["sep_ltcg_reduced"]    = _gen_rare(rng, n, 0.003, 1_500_000, 2_000_000)
+    inc["sep_stock_general"]   = _gen_rare(rng, n, 0.015, 500_000,   800_000)
+    inc["sep_stock_listed"]    = _gen_rare(rng, n, 0.060, 800_000,   1_500_000)
+    inc["sep_dividend_listed"] = _gen_rare(rng, n, 0.040, 200_000,   400_000)
+    inc["sep_futures"]         = _gen_rare(rng, n, 0.003, 300_000,   500_000)
+    inc["sep_forestry"]        = _gen_rare(rng, n, 0.001, 2_000_000, 3_000_000)
+    return inc
+
+
 def generate_dummy(n_per_year: int = N_PER_YEAR, years: list = None) -> pd.DataFrame:
     """実データに近い個人住民税レコードを確定申告書第1表の列構成で生成する。"""
     if years is None:
@@ -156,52 +210,35 @@ def generate_dummy(n_per_year: int = N_PER_YEAR, years: list = None) -> pd.DataF
         0,
     )
 
-    # 事業・不動産・配当・雑所得（年齢非依存、国税庁R4参考）
-    income_business = np.where(rng.random(n_per_year) < 0.12, rng.normal(4_728_000, 3_000_000), 0.0)
-    income_property = np.where(rng.random(n_per_year) < 0.06, rng.normal(5_425_000, 3_500_000), 0.0)
-    income_dividend = _gen_rare(rng, n_per_year, 0.10, 200_000, 250_000).astype(float)
-    income_other    = _gen_rare(rng, n_per_year, 0.05, 100_000, 200_000).astype(float)
+    # 給与以外の所得（2026-09-13: 新規加入者と共通の関数で生成。分布・確率は従来どおり）
+    _inc = _gen_non_salary_incomes(rng, n_per_year, age_arr)
+    income_business      = _inc["income_business"]
+    income_farming       = _inc["income_farming"]
+    income_property      = _inc["income_property"]
+    income_interest      = _inc["income_interest"]
+    income_dividend      = _inc["income_dividend"]
+    income_pension       = _inc["income_pension"]
+    income_misc_business = _inc["income_misc_business"]
+    income_other         = _inc["income_other"]
+    income_stcg          = _inc["income_stcg"]
+    income_ltcg          = _inc["income_ltcg"]
+    income_occasional    = _inc["income_occasional"]
+    sep_stcg_general     = _inc["sep_stcg_general"]
+    sep_stcg_reduced     = _inc["sep_stcg_reduced"]
+    sep_ltcg_general     = _inc["sep_ltcg_general"]
+    sep_ltcg_specific    = _inc["sep_ltcg_specific"]
+    sep_ltcg_reduced     = _inc["sep_ltcg_reduced"]
+    sep_stock_general    = _inc["sep_stock_general"]
+    sep_stock_listed     = _inc["sep_stock_listed"]
+    sep_dividend_listed  = _inc["sep_dividend_listed"]
+    sep_futures          = _inc["sep_futures"]
+    sep_forestry         = _inc["sep_forestry"]
+    income_pension_gross = _inc["income_pension_gross"]
 
-    # ── 公的年金等収入（厚生労働省R5概況: 国民年金平均＋厚生年金平均の合計。1万円単位）
-    # 保険会社の集計結果より設定
-    _pension_mu = np.select(
-        [(age_arr >= 60) & (age_arr < 65),
-         (age_arr >= 65) & (age_arr < 70),
-         (age_arr >= 70) & (age_arr < 75),
-         (age_arr >= 75) & (age_arr < 80),
-         age_arr >= 80],
-        [1_450_000, 2_480_000, 2_440_000, 2_470_000, 2_590_000],
-        default=0,
-    ).astype(float)
-    income_pension_gross = np.where(
-        age_arr < 60, 0.0,
-        np.maximum(0.0, rng.normal(_pension_mu, np.maximum(_pension_mu * 0.30, 1.0))),
-    )
-
-    # 給与所得・年金所得を収入から計算（65歳境界で控除額の計算式が変わる）
+    # 給与所得を収入から計算
     income_salary  = compute_salary_income(income_salary_gross, year=years[0])
-    income_pension = compute_pension_income(income_pension_gross, age_arr).round(0).astype(int)
 
     n = n_per_year
-    # 農業・利子・業務雑所得・総合譲渡・一時所得（低頻度。ベクトル化生成）
-    income_farming       = _gen_rare(rng, n, 0.015, 500_000,   400_000)
-    income_interest      = _gen_rare(rng, n, 0.060, 30_000,    50_000)
-    income_misc_business = _gen_rare(rng, n, 0.040, 200_000,   300_000)
-    income_stcg          = _gen_rare(rng, n, 0.010, 500_000,   800_000)
-    income_ltcg          = _gen_rare(rng, n, 0.020, 800_000,   1_000_000)
-    income_occasional    = _gen_rare(rng, n, 0.010, 200_000,   300_000)
-
-    # 分離課税所得（繰越控除後のため非負。高所得層中心で低確率）
-    sep_stcg_general    = _gen_rare(rng, n, 0.003, 1_000_000, 2_000_000)
-    sep_stcg_reduced    = _gen_rare(rng, n, 0.002, 800_000,   1_500_000)
-    sep_ltcg_general    = _gen_rare(rng, n, 0.015, 2_000_000, 3_000_000)
-    sep_ltcg_specific   = _gen_rare(rng, n, 0.008, 3_000_000, 5_000_000)
-    sep_ltcg_reduced    = _gen_rare(rng, n, 0.003, 1_500_000, 2_000_000)
-    sep_stock_general   = _gen_rare(rng, n, 0.015, 500_000,   800_000)
-    sep_stock_listed    = _gen_rare(rng, n, 0.060, 800_000,   1_500_000)
-    sep_dividend_listed = _gen_rare(rng, n, 0.040, 200_000,   400_000)
-    sep_futures         = _gen_rare(rng, n, 0.003, 300_000,   500_000)
-    sep_forestry        = _gen_rare(rng, n, 0.001, 2_000_000, 3_000_000)
 
     income_total = (
         income_salary + income_business + income_farming + income_property
@@ -344,72 +381,72 @@ def generate_dummy(n_per_year: int = N_PER_YEAR, years: list = None) -> pd.DataF
     person_ids = np.arange(1, n + 1)
 
     base_df = pd.DataFrame({
-        "person_id"               : person_ids,
-        "year"                    : years[0],
-        "gender"                  : gender,
-        "age"                     : age_arr,
-        "age_group"               : age_group_arr,
+        "仮ID"               : person_ids,
+        "年度"                    : years[0],
+        "性別"                  : gender,
+        "年齢"                     : age_arr,
+        "年齢区分"               : age_group_arr,
         # 収入
-        "income_salary_gross"     : income_salary_gross.round(0).astype(int),
-        "income_pension_gross"    : income_pension_gross.round(0).astype(int),
+        "給与収入"     : income_salary_gross.round(0).astype(int),
+        "雑収入_公的年金等"    : income_pension_gross.round(0).astype(int),
         # 所得
-        "income_salary"           : income_salary.round(0).astype(int),
-        "income_business"         : income_business.round(0).astype(int),
-        "income_farming"          : income_farming.round(0).astype(int),
-        "income_property"         : income_property.round(0).astype(int),
-        "income_interest"         : income_interest.round(0).astype(int),
-        "income_dividend"         : income_dividend.round(0).astype(int),
-        "income_pension"          : income_pension.round(0).astype(int),
-        "income_misc_business"    : income_misc_business.round(0).astype(int),
-        "income_other"            : income_other.round(0).astype(int),
-        "income_stcg"             : income_stcg.round(0).astype(int),
-        "income_ltcg"             : income_ltcg.round(0).astype(int),
-        "income_occasional"       : income_occasional.round(0).astype(int),
+        "給与所得"           : income_salary.round(0).astype(int),
+        "事業所得_営業等"         : income_business.round(0).astype(int),
+        "事業所得_農業"          : income_farming.round(0).astype(int),
+        "不動産所得"         : income_property.round(0).astype(int),
+        "利子所得"         : income_interest.round(0).astype(int),
+        "配当所得"         : income_dividend.round(0).astype(int),
+        "雑所得_公的年金等"          : income_pension.round(0).astype(int),
+        "雑所得_業務"    : income_misc_business.round(0).astype(int),
+        "雑所得_その他"            : income_other.round(0).astype(int),
+        "総合短期譲渡所得"             : income_stcg.round(0).astype(int),
+        "総合長期譲渡所得"             : income_ltcg.round(0).astype(int),
+        "一時所得"       : income_occasional.round(0).astype(int),
         # 分離課税所得
-        "sep_stcg_general"        : sep_stcg_general.round(0).astype(int),
-        "sep_stcg_reduced"        : sep_stcg_reduced.round(0).astype(int),
-        "sep_ltcg_general"        : sep_ltcg_general.round(0).astype(int),
-        "sep_ltcg_specific"       : sep_ltcg_specific.round(0).astype(int),
-        "sep_ltcg_reduced"        : sep_ltcg_reduced.round(0).astype(int),
-        "sep_stock_general"       : sep_stock_general.round(0).astype(int),
-        "sep_stock_listed"        : sep_stock_listed.round(0).astype(int),
-        "sep_dividend_listed"     : sep_dividend_listed.round(0).astype(int),
-        "sep_futures"             : sep_futures.round(0).astype(int),
-        "sep_forestry"            : sep_forestry.round(0).astype(int),
+        "分離_短期譲渡一般"        : sep_stcg_general.round(0).astype(int),
+        "分離_短期譲渡軽減"        : sep_stcg_reduced.round(0).astype(int),
+        "分離_長期譲渡一般"        : sep_ltcg_general.round(0).astype(int),
+        "分離_長期譲渡特定"       : sep_ltcg_specific.round(0).astype(int),
+        "分離_長期譲渡軽減"        : sep_ltcg_reduced.round(0).astype(int),
+        "分離_一般株式譲渡"       : sep_stock_general.round(0).astype(int),
+        "分離_特定株式譲渡"        : sep_stock_listed.round(0).astype(int),
+        "分離_上場株式配当"     : sep_dividend_listed.round(0).astype(int),
+        "分離_先物取引"             : sep_futures.round(0).astype(int),
+        "分離_山林"            : sep_forestry.round(0).astype(int),
         # 所得控除
-        "deduct_social_ins"       : deduct_social_ins.round(0).astype(int),
-        "deduct_small_biz_ins"    : deduct_small_biz_ins.round(0).astype(int),
-        "deduct_life_ins"         : deduct_life_ins.round(0).astype(int),
-        "deduct_earthquake_ins"   : deduct_earthquake.round(0).astype(int),
-        "deduct_casualty"         : deduct_casualty.round(0).astype(int),
-        "deduct_medical"          : deduct_medical.round(0).astype(int),
-        "deduct_disability"       : deduct_disability.round(0).astype(int),
-        "deduct_widow"            : deduct_widow.round(0).astype(int),
-        "deduct_spouse"           : deduct_spouse.round(0).astype(int),
-        "deduct_spouse_special"   : deduct_spouse_special.round(0).astype(int),
-        "deduct_dependent"        : deduct_dependent.round(0).astype(int),
-        "deduct_basic"            : deduct_basic.round(0).astype(int),
-        "deduct_working_student"  : deduct_working_student.round(0).astype(int),
-        "deduct_donation_income"  : deduct_donation_income.round(0).astype(int),
-        "n_dependent"             : n_dependent,
+        "社会保険料控除"       : deduct_social_ins.round(0).astype(int),
+        "小規模企業共済等掛金控除"    : deduct_small_biz_ins.round(0).astype(int),
+        "生命保険料控除"         : deduct_life_ins.round(0).astype(int),
+        "地震保険料控除"   : deduct_earthquake.round(0).astype(int),
+        "雑損控除"         : deduct_casualty.round(0).astype(int),
+        "医療費控除"          : deduct_medical.round(0).astype(int),
+        "障害者控除"       : deduct_disability.round(0).astype(int),
+        "寡婦控除"            : deduct_widow.round(0).astype(int),
+        "配偶者控除"           : deduct_spouse.round(0).astype(int),
+        "配偶者特別控除"   : deduct_spouse_special.round(0).astype(int),
+        "扶養控除"        : deduct_dependent.round(0).astype(int),
+        "基礎控除"            : deduct_basic.round(0).astype(int),
+        "勤労学生控除"  : deduct_working_student.round(0).astype(int),
+        "寄附金控除"  : deduct_donation_income.round(0).astype(int),
+        "扶養人数"             : n_dependent,
         # 課税所得
-        "taxable_income"          : taxable_inc.round(0).astype(int),
+        "課税標準額"          : taxable_inc.round(0).astype(int),
         # 税額控除
-        "deduct_tax_housing"      : deduct_tax_housing.round(0).astype(int),
-        "deduct_tax_furusato"     : deduct_tax_furusato.round(0).astype(int),
-        "taxcredit_adjustment"    : taxcredit_adjustment.round(0).astype(int),
-        "taxcredit_dividend"      : taxcredit_dividend.round(0).astype(int),
-        "taxcredit_foreign"       : taxcredit_foreign.round(0).astype(int),
-        "taxcredit_dividend_split": taxcredit_dividend_split.round(0).astype(int),
+        "住宅借入金特別控除"      : deduct_tax_housing.round(0).astype(int),
+        "寄附金税額控除"     : deduct_tax_furusato.round(0).astype(int),
+        "調整控除"    : taxcredit_adjustment.round(0).astype(int),
+        "配当控除"      : taxcredit_dividend.round(0).astype(int),
+        "外国税額控除"       : taxcredit_foreign.round(0).astype(int),
+        "配当割額・株式等譲渡所得割額の控除": taxcredit_dividend_split.round(0).astype(int),
         # 税額
-        "tax_amount"              : tax_amount.round(0).astype(int),
-        "collection_type"         : collection,
+        "年税額"              : tax_amount.round(0).astype(int),
+        "徴収区分"         : collection,
         # EDA用内訳（モデルでは03でdrop）
-        "muni_kintowari"          : np.where(_nz, 3_500, 0).astype(int),
-        "muni_tokuwari"           : (_itp * 0.6).round(0).astype(int),
-        "pref_kintowari"          : np.where(_nz, 1_800, 0).astype(int),
-        "pref_tokuwari"           : (_itp * 0.4).round(0).astype(int),
-        "shortfall"               : 0,
+        "市町村_均等割"          : np.where(_nz, 3_500, 0).astype(int),
+        "市町村_所得割"           : (_itp * 0.6).round(0).astype(int),
+        "都道府県_均等割"          : np.where(_nz, 1_800, 0).astype(int),
+        "都道府県_所得割"           : (_itp * 0.4).round(0).astype(int),
+        "控除不足額"               : 0,
     })
     all_dfs.append(base_df)
 
@@ -419,9 +456,9 @@ def generate_dummy(n_per_year: int = N_PER_YEAR, years: list = None) -> pd.DataF
         n_leave   = int(n_per_year * TURNOVER_RATE)
         leave_idx = rng.choice(current_df.index, size=n_leave, replace=False)
         stay_df   = current_df.drop(leave_idx).copy()
-        stay_df["year"]      = yr
-        stay_df["age"]       = stay_df["age"] + 1
-        stay_df["age_group"] = _age_to_group(stay_df["age"].values)
+        stay_df["年度"]      = yr
+        stay_df["年齢"]       = stay_df["年齢"] + 1
+        stay_df["年齢区分"] = _age_to_group(stay_df["年齢"].values)
 
         # 前年比成長率: APPLY_WAGE_GROWTH=True なら年度別、False なら旧挙動（+0.5%固定）
         sal_trend   = SALARY_GROWTH_RATES.get(yr, 1.005) if APPLY_WAGE_GROWTH else 1.005
@@ -430,112 +467,112 @@ def generate_dummy(n_per_year: int = N_PER_YEAR, years: list = None) -> pd.DataF
         noise = rng.normal(1.0, 0.03, size=len(stay_df))
 
         # 給与収入に年度別賃上げ率を適用し、給与所得を再算出
-        stay_df["income_salary_gross"] = (
-            stay_df["income_salary_gross"] * sal_trend * noise
+        stay_df["給与収入"] = (
+            stay_df["給与収入"] * sal_trend * noise
         ).clip(0).round(0).astype(int)
-        stay_df["income_salary"] = (
-            compute_salary_income(stay_df["income_salary_gross"].values, year=yr)
+        stay_df["給与所得"] = (
+            compute_salary_income(stay_df["給与収入"].values, year=yr)
         ).round(0).astype(int)
 
         # 公的年金収入に年度別改定率を適用（農業・事業・不動産は旧トレンド固定）
-        stay_df["income_pension_gross"] = (
-            stay_df["income_pension_gross"] * pen_trend * noise
+        stay_df["雑収入_公的年金等"] = (
+            stay_df["雑収入_公的年金等"] * pen_trend * noise
         ).clip(0).round(0).astype(int)
-        for col in ["income_farming"]:
+        for col in ["事業所得_農業"]:
             stay_df[col] = (stay_df[col] * other_trend * noise).clip(0).round(0).astype(int)
-        for col in ["income_business", "income_property"]:
+        for col in ["事業所得_営業等", "不動産所得"]:
             stay_df[col] = (stay_df[col] * other_trend * noise).round(0).astype(int)
 
         # 年金所得を収入から再計算（年齢に応じた控除を適用）
-        stay_df["income_pension"] = compute_pension_income(
-            stay_df["income_pension_gross"].values, stay_df["age"].values
+        stay_df["雑所得_公的年金等"] = compute_pension_income(
+            stay_df["雑収入_公的年金等"].values, stay_df["年齢"].values
         ).round(0).astype(int)
 
         # 扶養変動（8%が毎年変化）
         change_dep = rng.random(len(stay_df)) < 0.08
-        stay_df.loc[change_dep, "deduct_dependent"] = (
+        stay_df.loc[change_dep, "扶養控除"] = (
             rng.integers(0, 4, size=change_dep.sum()) * 330_000
         )
-        stay_df.loc[change_dep, "n_dependent"] = (
-            stay_df.loc[change_dep, "deduct_dependent"] // 330_000
+        stay_df.loc[change_dep, "扶養人数"] = (
+            stay_df.loc[change_dep, "扶養控除"] // 330_000
         )
 
         # 合計所得を全所得列で再計算
         inc_cols = [c for c in ALL_INCOME_COLS if c in stay_df.columns]
         total_inc_s = stay_df[inc_cols].sum(axis=1)
 
-        stay_df["deduct_social_ins"] = (
-            stay_df["income_salary_gross"] * 0.14
+        stay_df["社会保険料控除"] = (
+            stay_df["給与収入"] * 0.14
         ).round(0).astype(int)
-        stay_df["deduct_basic"] = (
+        stay_df["基礎控除"] = (
             compute_basic_deduction(total_inc_s.values)
         ).round(0).astype(int)
 
         total_dec_s = (
-            stay_df["deduct_social_ins"] + stay_df["deduct_small_biz_ins"]
-            + stay_df["deduct_life_ins"] + stay_df["deduct_earthquake_ins"]
-            + stay_df["deduct_casualty"] + stay_df["deduct_medical"]
-            + stay_df["deduct_disability"] + stay_df["deduct_widow"]
-            + stay_df["deduct_spouse"] + stay_df["deduct_spouse_special"]
-            + stay_df["deduct_dependent"] + stay_df["deduct_basic"]
-            + stay_df["deduct_working_student"] + stay_df["deduct_donation_income"]
+            stay_df["社会保険料控除"] + stay_df["小規模企業共済等掛金控除"]
+            + stay_df["生命保険料控除"] + stay_df["地震保険料控除"]
+            + stay_df["雑損控除"] + stay_df["医療費控除"]
+            + stay_df["障害者控除"] + stay_df["寡婦控除"]
+            + stay_df["配偶者控除"] + stay_df["配偶者特別控除"]
+            + stay_df["扶養控除"] + stay_df["基礎控除"]
+            + stay_df["勤労学生控除"] + stay_df["寄附金控除"]
         )
-        stay_df["taxable_income"] = (total_inc_s - total_dec_s).clip(0).round(0).astype(int)
+        stay_df["課税標準額"] = (total_inc_s - total_dec_s).clip(0).round(0).astype(int)
 
         # 住宅ローン控除: 年間消滅率で一部が0に
         keep_housing = rng.random(len(stay_df)) >= HOUSING_PARAMS["annual_exit_rate"]
-        stay_df["deduct_tax_housing"] = np.where(
-            keep_housing, stay_df["deduct_tax_housing"].values, 0
+        stay_df["住宅借入金特別控除"] = np.where(
+            keep_housing, stay_df["住宅借入金特別控除"].values, 0
         ).astype(int)
 
-        stay_df["deduct_tax_furusato"] = estimate_furusato_resident_deduction(
-            stay_df["taxable_income"].values,
+        stay_df["寄附金税額控除"] = estimate_furusato_resident_deduction(
+            stay_df["課税標準額"].values,
             donation_rate=FURUSATO_PARAMS["donation_rate"],
             one_stop_ratio=FURUSATO_PARAMS["one_stop_ratio"],
         ).astype(int)
 
         # 税額控除を更新
-        stay_taxable = stay_df["taxable_income"].values
-        stay_df["taxcredit_adjustment"]    = np.where(stay_taxable > 0, 2_500, 0).astype(int)
-        stay_df["taxcredit_dividend"]      = (stay_df["income_dividend"].values * 0.028).round(0).astype(int)
-        stay_df["taxcredit_dividend_split"] = (
-            (stay_df["sep_stock_listed"].values + stay_df["sep_dividend_listed"].values) * 0.05
+        stay_taxable = stay_df["課税標準額"].values
+        stay_df["調整控除"]    = np.where(stay_taxable > 0, 2_500, 0).astype(int)
+        stay_df["配当控除"]      = (stay_df["配当所得"].values * 0.028).round(0).astype(int)
+        stay_df["配当割額・株式等譲渡所得割額の控除"] = (
+            (stay_df["分離_特定株式譲渡"].values + stay_df["分離_上場株式配当"].values) * 0.05
         ).round(0).astype(int)
 
         stay_tax = (
             np.maximum(
                 stay_taxable * 0.10
-                - stay_df["deduct_tax_housing"].values
-                - stay_df["deduct_tax_furusato"].values
-                - stay_df["taxcredit_adjustment"].values
-                - stay_df["taxcredit_dividend"].values
-                - stay_df["taxcredit_dividend_split"].values,
+                - stay_df["住宅借入金特別控除"].values
+                - stay_df["寄附金税額控除"].values
+                - stay_df["調整控除"].values
+                - stay_df["配当控除"].values
+                - stay_df["配当割額・株式等譲渡所得割額の控除"].values,
                 0,
             ) + 5_300
         ).round(0).astype(int)
         stay_is_non_taxable = compute_non_taxable_flag(
             total_inc_s.values,
-            stay_df["n_dependent"].values,
-            (stay_df["deduct_spouse"].values > 0).astype(int),
+            stay_df["扶養人数"].values,
+            (stay_df["配偶者控除"].values > 0).astype(int),
         )
-        stay_df["tax_amount"] = np.where(stay_is_non_taxable, 0, stay_tax).astype(int)
+        stay_df["年税額"] = np.where(stay_is_non_taxable, 0, stay_tax).astype(int)
 
         # 均等割・所得割を更新（EDA用）
-        _s_itp = np.maximum(stay_df["tax_amount"].values - 5_300, 0).astype(float)
-        _s_nz  = stay_df["tax_amount"].values > 0
-        stay_df["muni_kintowari"] = np.where(_s_nz, 3_500, 0).astype(int)
-        stay_df["muni_tokuwari"]  = (_s_itp * 0.6).round(0).astype(int)
-        stay_df["pref_kintowari"] = np.where(_s_nz, 1_800, 0).astype(int)
-        stay_df["pref_tokuwari"]  = (_s_itp * 0.4).round(0).astype(int)
-        stay_df["shortfall"]      = 0
+        _s_itp = np.maximum(stay_df["年税額"].values - 5_300, 0).astype(float)
+        _s_nz  = stay_df["年税額"].values > 0
+        stay_df["市町村_均等割"] = np.where(_s_nz, 3_500, 0).astype(int)
+        stay_df["市町村_所得割"]  = (_s_itp * 0.6).round(0).astype(int)
+        stay_df["都道府県_均等割"] = np.where(_s_nz, 1_800, 0).astype(int)
+        stay_df["都道府県_所得割"]  = (_s_itp * 0.4).round(0).astype(int)
+        stay_df["控除不足額"]      = 0
 
         # 人口成長率から目標人数を計算し、流入者数を調整
         target_n  = round(n_per_year * POPULATION_GROWTH_RATES.get(yr, 1.0))
         n_new     = max(0, target_n - len(stay_df))
 
-        # ── 新規流入者（簡略化: 給与主体で稀少所得は0）─────────────────────────
-        new_ids        = np.arange(current_df["person_id"].max() + 1,
-                                   current_df["person_id"].max() + n_new + 1)
+        # ── 新規流入者（給与は独自水準。給与以外の所得は2026-09-13から初年度と同じ分布で生成）──
+        new_ids        = np.arange(current_df["仮ID"].max() + 1,
+                                   current_df["仮ID"].max() + n_new + 1)
         new_age_arr    = _generate_ages(rng, n_new)
         new_age_groups = _age_to_group(new_age_arr)
         # 新規流入者の給与は基準年水準に累積成長率を乗じて当該年度の水準に調整
@@ -543,6 +580,33 @@ def generate_dummy(n_per_year: int = N_PER_YEAR, years: list = None) -> pd.DataF
         _sal_std  = 1_300_000 * _cumulative_factor(SALARY_GROWTH_RATES, yr)
         new_sal_gross  = np.maximum(0, rng.normal(_sal_base, _sal_std, n_new))
         new_sal_net    = compute_salary_income(new_sal_gross, year=yr)
+        # 2026-09-13変更: 新規加入者にも給与以外の所得を初年度と同じ確率・分布で持たせる
+        # （従来は全て0円固定だったため、年を追うごとに事業所得・不動産所得等の保有者が減っていた）
+        new_inc   = _gen_non_salary_incomes(rng, n_new, new_age_arr)
+        new_total = (
+            new_sal_net
+            + new_inc["income_business"]
+            + new_inc["income_farming"]
+            + new_inc["income_property"]
+            + new_inc["income_interest"]
+            + new_inc["income_dividend"]
+            + new_inc["income_pension"]
+            + new_inc["income_misc_business"]
+            + new_inc["income_other"]
+            + new_inc["income_stcg"]
+            + new_inc["income_ltcg"]
+            + new_inc["income_occasional"]
+            + new_inc["sep_stcg_general"]
+            + new_inc["sep_stcg_reduced"]
+            + new_inc["sep_ltcg_general"]
+            + new_inc["sep_ltcg_specific"]
+            + new_inc["sep_ltcg_reduced"]
+            + new_inc["sep_stock_general"]
+            + new_inc["sep_stock_listed"]
+            + new_inc["sep_dividend_listed"]
+            + new_inc["sep_futures"]
+            + new_inc["sep_forestry"]
+        )
         new_dep_n      = rng.integers(0, 3, n_new)
         new_dep        = (new_dep_n * 330_000).astype(int)
         new_spo        = np.where(rng.random(n_new) < 0.20, 330_000, 0).astype(int)
@@ -553,9 +617,9 @@ def generate_dummy(n_per_year: int = N_PER_YEAR, years: list = None) -> pd.DataF
                                   rng.integers(5_000, _EARTHQUAKE_INS_UPPER + 1, size=n_new), 0).astype(int)
         new_sbiz       = np.where(rng.random(n_new) < 0.13,
                                   rng.integers(100_000, 840_001, size=n_new), 0).astype(int)
-        new_basic      = compute_basic_deduction(new_sal_net).round(0).astype(int)
+        new_basic      = compute_basic_deduction(new_total).round(0).astype(int)
         new_taxable    = (
-            new_sal_net - new_si - new_li - new_eq - new_dep - new_spo - new_basic
+            new_total - new_si - new_li - new_eq - new_dep - new_spo - new_basic
         ).clip(0).round(0).astype(int)
 
         new_donation = np.where(rng.random(n_new) < _donation_rate,
@@ -571,81 +635,84 @@ def generate_dummy(n_per_year: int = N_PER_YEAR, years: list = None) -> pd.DataF
             one_stop_ratio=FURUSATO_PARAMS["one_stop_ratio"],
         ).astype(int)
         new_adj   = np.where(new_taxable > 0, 2_500, 0).astype(int)
+        new_div_credit = (new_inc["income_dividend"] * 0.028).round(0).astype(int)
+        new_div_split  = ((new_inc["sep_stock_listed"] + new_inc["sep_dividend_listed"]) * 0.05).round(0).astype(int)
         new_tax   = (
-            np.maximum(new_taxable * 0.10 - new_housing - new_furusato - new_adj, 0) + 5_300
+            np.maximum(new_taxable * 0.10 - new_housing - new_furusato - new_adj
+                       - new_div_credit - new_div_split, 0) + 5_300
         ).round(0).astype(int)
         new_is_non_taxable = compute_non_taxable_flag(
-            new_sal_net, new_dep_n, (new_spo > 0).astype(int)
+            new_total, new_dep_n, (new_spo > 0).astype(int)
         )
         new_tax = np.where(new_is_non_taxable, 0, new_tax).astype(int)
 
         new_df = pd.DataFrame({
-            "person_id"              : new_ids,
-            "year"                   : yr,
-            "gender"                 : rng.choice([0, 1], size=n_new, p=GENDER_RATIO),
-            "age"                    : new_age_arr,
-            "age_group"              : new_age_groups,
+            "仮ID"              : new_ids,
+            "年度"                   : yr,
+            "性別"                 : rng.choice([0, 1], size=n_new, p=GENDER_RATIO),
+            "年齢"                    : new_age_arr,
+            "年齢区分"              : new_age_groups,
             # 収入
-            "income_salary_gross"    : new_sal_gross.round(0).astype(int),
-            "income_pension_gross"   : 0,
+            "給与収入"    : new_sal_gross.round(0).astype(int),
+            "雑収入_公的年金等"   : new_inc["income_pension_gross"].round(0).astype(int),
             # 所得
-            "income_salary"          : new_sal_net.round(0).astype(int),
-            "income_business"        : 0,
-            "income_farming"         : 0,
-            "income_property"        : 0,
-            "income_interest"        : 0,
-            "income_dividend"        : 0,
-            "income_pension"         : 0,
-            "income_misc_business"   : 0,
-            "income_other"           : 0,
-            "income_stcg"            : 0,
-            "income_ltcg"            : 0,
-            "income_occasional"      : 0,
+            "給与所得"          : new_sal_net.round(0).astype(int),
+            "事業所得_営業等"        : new_inc["income_business"].round(0).astype(int),
+            "事業所得_農業"         : new_inc["income_farming"].round(0).astype(int),
+            "不動産所得"        : new_inc["income_property"].round(0).astype(int),
+            "利子所得"        : new_inc["income_interest"].round(0).astype(int),
+            "配当所得"        : new_inc["income_dividend"].round(0).astype(int),
+            "雑所得_公的年金等"         : new_inc["income_pension"].round(0).astype(int),
+            "雑所得_業務"   : new_inc["income_misc_business"].round(0).astype(int),
+            "雑所得_その他"           : new_inc["income_other"].round(0).astype(int),
+            "総合短期譲渡所得"            : new_inc["income_stcg"].round(0).astype(int),
+            "総合長期譲渡所得"            : new_inc["income_ltcg"].round(0).astype(int),
+            "一時所得"      : new_inc["income_occasional"].round(0).astype(int),
             # 分離課税所得
-            "sep_stcg_general"       : 0,
-            "sep_stcg_reduced"       : 0,
-            "sep_ltcg_general"       : 0,
-            "sep_ltcg_specific"      : 0,
-            "sep_ltcg_reduced"       : 0,
-            "sep_stock_general"      : 0,
-            "sep_stock_listed"       : 0,
-            "sep_dividend_listed"    : 0,
-            "sep_futures"            : 0,
-            "sep_forestry"           : 0,
+            "分離_短期譲渡一般"       : new_inc["sep_stcg_general"].round(0).astype(int),
+            "分離_短期譲渡軽減"       : new_inc["sep_stcg_reduced"].round(0).astype(int),
+            "分離_長期譲渡一般"       : new_inc["sep_ltcg_general"].round(0).astype(int),
+            "分離_長期譲渡特定"      : new_inc["sep_ltcg_specific"].round(0).astype(int),
+            "分離_長期譲渡軽減"       : new_inc["sep_ltcg_reduced"].round(0).astype(int),
+            "分離_一般株式譲渡"      : new_inc["sep_stock_general"].round(0).astype(int),
+            "分離_特定株式譲渡"       : new_inc["sep_stock_listed"].round(0).astype(int),
+            "分離_上場株式配当"    : new_inc["sep_dividend_listed"].round(0).astype(int),
+            "分離_先物取引"            : new_inc["sep_futures"].round(0).astype(int),
+            "分離_山林"           : new_inc["sep_forestry"].round(0).astype(int),
             # 所得控除
-            "deduct_social_ins"      : new_si,
-            "deduct_small_biz_ins"   : new_sbiz,
-            "deduct_life_ins"        : new_li,
-            "deduct_earthquake_ins"  : new_eq,
-            "deduct_casualty"        : 0,
-            "deduct_medical"         : 0,
-            "deduct_disability"      : 0,
-            "deduct_widow"           : 0,
-            "deduct_spouse"          : new_spo,
-            "deduct_spouse_special"  : 0,
-            "deduct_dependent"       : new_dep,
-            "deduct_basic"           : new_basic,
-            "deduct_working_student" : 0,
-            "deduct_donation_income" : new_donation,
-            "n_dependent"            : new_dep_n,
+            "社会保険料控除"      : new_si,
+            "小規模企業共済等掛金控除"   : new_sbiz,
+            "生命保険料控除"        : new_li,
+            "地震保険料控除"  : new_eq,
+            "雑損控除"        : 0,
+            "医療費控除"         : 0,
+            "障害者控除"      : 0,
+            "寡婦控除"           : 0,
+            "配偶者控除"          : new_spo,
+            "配偶者特別控除"  : 0,
+            "扶養控除"       : new_dep,
+            "基礎控除"           : new_basic,
+            "勤労学生控除" : 0,
+            "寄附金控除" : new_donation,
+            "扶養人数"            : new_dep_n,
             # 課税所得
-            "taxable_income"         : new_taxable,
+            "課税標準額"         : new_taxable,
             # 税額控除
-            "deduct_tax_housing"     : new_housing,
-            "deduct_tax_furusato"    : new_furusato,
-            "taxcredit_adjustment"   : new_adj,
-            "taxcredit_dividend"     : 0,
-            "taxcredit_foreign"      : 0,
-            "taxcredit_dividend_split": 0,
+            "住宅借入金特別控除"     : new_housing,
+            "寄附金税額控除"    : new_furusato,
+            "調整控除"   : new_adj,
+            "配当控除"     : new_div_credit,
+            "外国税額控除"      : 0,
+            "配当割額・株式等譲渡所得割額の控除": new_div_split,
             # 税額
-            "tax_amount"             : new_tax,
-            "collection_type"        : rng.choice([1, 2], size=n_new, p=[0.80, 0.20]),
+            "年税額"             : new_tax,
+            "徴収区分"        : rng.choice([1, 2], size=n_new, p=[0.80, 0.20]),
             # EDA用内訳
-            "muni_kintowari"         : np.where(new_tax > 0, 3_500, 0).astype(int),
-            "muni_tokuwari"          : (np.maximum(new_tax - 5_300, 0) * 0.6).round(0).astype(int),
-            "pref_kintowari"         : np.where(new_tax > 0, 1_800, 0).astype(int),
-            "pref_tokuwari"          : (np.maximum(new_tax - 5_300, 0) * 0.4).round(0).astype(int),
-            "shortfall"              : 0,
+            "市町村_均等割"         : np.where(new_tax > 0, 3_500, 0).astype(int),
+            "市町村_所得割"          : (np.maximum(new_tax - 5_300, 0) * 0.6).round(0).astype(int),
+            "都道府県_均等割"         : np.where(new_tax > 0, 1_800, 0).astype(int),
+            "都道府県_所得割"          : (np.maximum(new_tax - 5_300, 0) * 0.4).round(0).astype(int),
+            "控除不足額"              : 0,
         })
 
         year_df = pd.concat([stay_df, new_df], ignore_index=True)
@@ -672,7 +739,7 @@ def main():
 
     print(f"\n生成完了: 合計 {len(df):,} 件")
     print("\n── 年度別サマリー ──")
-    print(df.groupby("year")["tax_amount"].agg(
+    print(df.groupby("年度")["年税額"].agg(
         件数="count",
         税額合計_億円=lambda x: round(x.sum() / 1e8, 2),
         一人あたり平均_万円=lambda x: round(x.mean() / 1e4, 1),

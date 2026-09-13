@@ -41,7 +41,7 @@ from config import (
     NON_TAXABLE_FAMILY_ADD,
 )
 
-TARGET_COL         = "tax_amount"
+TARGET_COL         = "年税額"
 REFORM_CONFIG_PATH = "data/tax_reform_config.csv"
 
 
@@ -377,10 +377,10 @@ def _apply_teigaku_reduction(df: pd.DataFrame, params: dict) -> pd.DataFrame:
     amount   = int(params["amount_per_person"])
     eff_year = int(params["_effective_year"])
 
-    if "year" not in df.columns:
+    if "年度" not in df.columns:
         return df
 
-    mask = df["year"] == eff_year
+    mask = df["年度"] == eff_year
     n    = int(mask.sum())
     if n == 0:
         return df
@@ -410,13 +410,13 @@ def _apply_salary_deduction_floor(df: pd.DataFrame, params: dict) -> pd.DataFram
     old_floor = float(params["old_floor"])  # 550_000
     new_floor = float(params["new_floor"])  # 650_000
 
-    # income_salary_gross（給与収入）があればそれを使用、なければ income_salary を収入とみなす
-    if "income_salary_gross" in df.columns:
-        gross   = df["income_salary_gross"].values
-        has_sal = df.get("has_salary", (df["income_salary_gross"] > 0).astype(int))
+    # 給与収入（給与収入）があればそれを使用、なければ 給与所得 を収入とみなす
+    if "給与収入" in df.columns:
+        gross   = df["給与収入"].values
+        has_sal = df.get("給与所得有無", (df["給与収入"] > 0).astype(int))
     else:
-        gross   = df["income_salary"].values
-        has_sal = df.get("has_salary", (df["income_salary"] > 0).astype(int))
+        gross   = df["給与所得"].values
+        has_sal = df.get("給与所得有無", (df["給与所得"] > 0).astype(int))
 
     old_deduction = _calc_salary_deduction(gross, old_floor)
     new_deduction = _calc_salary_deduction(gross, new_floor)
@@ -434,40 +434,40 @@ def _apply_salary_deduction_floor(df: pd.DataFrame, params: dict) -> pd.DataFram
 
     df = df.copy()
 
-    if "income_salary_gross" in df.columns:
-        # 新スキーマ: income_salary（所得）を削減 → income_total を再計算
-        df.loc[mask, "income_salary"] = (
-            (df.loc[mask, "income_salary"] - deduction_increase.loc[mask])
-            .clip(lower=0).round(0).astype(df["income_salary"].dtype)
+    if "給与収入" in df.columns:
+        # 新スキーマ: 給与所得（所得）を削減 → 総所得金額等 を再計算
+        df.loc[mask, "給与所得"] = (
+            (df.loc[mask, "給与所得"] - deduction_increase.loc[mask])
+            .clip(lower=0).round(0).astype(df["給与所得"].dtype)
         )
         from config import ALL_INCOME_COLS
         inc_cols = [c for c in ALL_INCOME_COLS if c in df.columns]
-        df["income_total"] = df[inc_cols].sum(axis=1).clip(lower=0)
+        df["総所得金額等"] = df[inc_cols].sum(axis=1).clip(lower=0)
 
-    # taxable_income を削減
-    df.loc[mask, "taxable_income"] = (
-        (df.loc[mask, "taxable_income"] - deduction_increase.loc[mask])
-        .clip(lower=0).round(0).astype(df["taxable_income"].dtype)
+    # 課税標準額 を削減
+    df.loc[mask, "課税標準額"] = (
+        (df.loc[mask, "課税標準額"] - deduction_increase.loc[mask])
+        .clip(lower=0).round(0).astype(df["課税標準額"].dtype)
     )
 
-    if "deduct_total" in df.columns:
-        df.loc[mask, "deduct_total"] = (
-            (df.loc[mask, "deduct_total"] + deduction_increase.loc[mask])
-            .round(0).astype(df["deduct_total"].dtype)
+    if "差引所得控除合計" in df.columns:
+        df.loc[mask, "差引所得控除合計"] = (
+            (df.loc[mask, "差引所得控除合計"] + deduction_increase.loc[mask])
+            .round(0).astype(df["差引所得控除合計"].dtype)
         )
-    if "deduct_rate" in df.columns and "income_total" in df.columns:
-        df["deduct_rate"] = (
-            df["deduct_total"] / df["income_total"].replace(0, np.nan)
+    if "所得控除率" in df.columns and "総所得金額等" in df.columns:
+        df["所得控除率"] = (
+            df["差引所得控除合計"] / df["総所得金額等"].replace(0, np.nan)
         ).fillna(0).clip(0, 1)
-    if "taxable_rate" in df.columns and "income_total" in df.columns:
-        df["taxable_rate"] = (
-            df["taxable_income"] / df["income_total"].replace(0, np.nan)
+    if "課税標準率" in df.columns and "総所得金額等" in df.columns:
+        df["課税標準率"] = (
+            df["課税標準額"] / df["総所得金額等"].replace(0, np.nan)
         ).fillna(0).clip(0, 1)
 
     max_inc  = deduction_increase[mask].max()
     total_red = (deduction_increase[mask] * 0.10).sum() / 1e8
-    median_gross = (df.loc[mask, "income_salary_gross"].median() if "income_salary_gross" in df.columns
-                    else df.loc[mask, "income_salary"].median()) / 1e4
+    median_gross = (df.loc[mask, "給与収入"].median() if "給与収入" in df.columns
+                    else df.loc[mask, "給与所得"].median()) / 1e4
     print(f"    給与所得控除引き上げ: {n:,}人対象 / 対象者給与収入中央値 {median_gross:.0f}万円 / "
           f"最大控除増 {max_inc/1e4:.1f}万円 / 税額減少概算 -{total_red:.2f}億円")
     return df
@@ -501,7 +501,7 @@ def _apply_special_dependent_allowance(df: pd.DataFrame, params: dict) -> pd.Dat
 # 補正レジストリ（名前 → 関数）
 # ─────────────────────────────────────────────
 REFORM_REGISTRY: dict = {
-    "teigaku_reduction"          : _apply_teigaku_reduction,
+    "定額減税額"          : _apply_teigaku_reduction,
     "salary_deduction_floor"     : _apply_salary_deduction_floor,
     "dependent_income_limit"     : _apply_dependent_income_limit,
     "special_dependent_allowance": _apply_special_dependent_allowance,

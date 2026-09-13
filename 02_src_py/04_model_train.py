@@ -105,12 +105,12 @@ def _predict_with_nontaxable(
 ) -> np.ndarray:
     ## モデル予測値を取得し、最小税額はMIN_TAX(5300円)となるよう設定
     pred = np.maximum(model.predict(feat_df[feat_cols].fillna(0).values), MIN_TAX)
-    _nd  = raw_df["n_dependent"].values if "n_dependent" in raw_df.columns \
-        else (raw_df["deduct_dependent"].values / 330_000).round().astype(int)
+    _nd  = raw_df["扶養人数"].values if "扶養人数" in raw_df.columns \
+        else (raw_df["扶養控除"].values / 330_000).round().astype(int)
     ## tax_reform.py より関数を読み込み、非課税フラグを計算
     _fl  = compute_non_taxable_flag(
-        raw_df["income_total"].values, _nd,
-        (raw_df["deduct_spouse"].values > 0).astype(int),
+        raw_df["総所得金額等"].values, _nd,
+        (raw_df["配偶者控除"].values > 0).astype(int),
     )
     return np.where(_fl, 0, pred)
 
@@ -123,7 +123,7 @@ def run_walkforward_folds(
     min_train: int = WF_MIN_TRAIN_YEARS,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     ## 各年tについて「tより前の年」をtrain候補にし、その数がmin_train（=2）以上ある年だけ採用
-    all_years = sorted(df["year"].unique().tolist())
+    all_years = sorted(df["年度"].unique().tolist())
     folds = [
         ([y for y in all_years if y < t], t)
         for t in all_years
@@ -135,9 +135,9 @@ def run_walkforward_folds(
     last_fold_preds = pd.DataFrame()
 
     for train_years, test_year in folds:
-        tr_df  = df_corrected[df_corrected["year"].isin(train_years)].reset_index(drop=True)
-        te_df  = df_corrected[df_corrected["year"] == test_year].reset_index(drop=True)
-        te_raw = df[df["year"] == test_year].reset_index(drop=True)
+        tr_df  = df_corrected[df_corrected["年度"].isin(train_years)].reset_index(drop=True)
+        te_df  = df_corrected[df_corrected["年度"] == test_year].reset_index(drop=True)
+        te_raw = df[df["年度"] == test_year].reset_index(drop=True)
 
         m = lgb.LGBMRegressor(**LGBM_PARAMS)
         m.fit(
@@ -173,7 +173,7 @@ def run_walkforward_folds(
 
         ## 最終フォールド（test=TEST_YEAR）の個人別予測を保持
         if test_year == TEST_YEAR:
-            last_fold_preds = te_raw[["person_id", "year", TARGET_COL]].copy()
+            last_fold_preds = te_raw[["仮ID", "年度", TARGET_COL]].copy()
             last_fold_preds["pred_tax"] = pred.round(0).astype(int)
             last_fold_preds["error"]    = last_fold_preds["pred_tax"] - last_fold_preds[TARGET_COL]
 
@@ -230,7 +230,7 @@ def main():
     ## config.py から PREPARED_DATA_PATH = "data/03out_individual_prepared.csv"
     print(f"データ読込: {PREPARED_DATA_PATH}") 
     df = pd.read_csv(PREPARED_DATA_PATH, encoding="utf-8-sig")
-    print(f"  {len(df):,} 件 / {df['year'].nunique()} 年分\n")
+    print(f"  {len(df):,} 件 / {df['年度'].nunique()} 年分\n")
 
     feat_cols = [c for c in FEATURE_COLS if c in df.columns]
     missing   = [c for c in FEATURE_COLS if c not in df.columns]
@@ -253,9 +253,9 @@ def main():
     if reforms:
         for r in reforms:
             yr = r["params"]["_effective_year"]
-            if yr in df["year"].values:
-                orig = df[df["year"] == yr][TARGET_COL].mean() / 1e4
-                corr = df_corrected[df_corrected["year"] == yr][TARGET_COL].mean() / 1e4
+            if yr in df["年度"].values:
+                orig = df[df["年度"] == yr][TARGET_COL].mean() / 1e4
+                corr = df_corrected[df_corrected["年度"] == yr][TARGET_COL].mean() / 1e4
                 print(f"  {yr}年 平均税額: 補正前 {orig:.1f}万円 → 補正後 {corr:.1f}万円")
     print()
 
@@ -278,7 +278,7 @@ def main():
     # おためし
     print(f"  final_train_years:{final_train_years}")
     
-    train_df = df_corrected[df_corrected["year"].isin(final_train_years)].reset_index(drop=True)
+    train_df = df_corrected[df_corrected["年度"].isin(final_train_years)].reset_index(drop=True)
     print(f"  訓練: {len(train_df):,} 件（{final_train_years[0]}〜{final_train_years[-1]}年・label補正済）\n")
 
     model = lgb.LGBMRegressor(**LGBM_PARAMS)
@@ -305,8 +305,8 @@ def main():
         metrics_test = print_metrics(f"最終フォールド out-of-sample（{TEST_YEAR}年）", y_test, pred_test)
     else:
         print(f"── 個人レベル精度（テスト年 = {TEST_YEAR}年） ──")
-        test_df     = df_corrected[df_corrected["year"] == TEST_YEAR].reset_index(drop=True)
-        test_df_raw = df[df["year"] == TEST_YEAR].reset_index(drop=True)
+        test_df     = df_corrected[df_corrected["年度"] == TEST_YEAR].reset_index(drop=True)
+        test_df_raw = df[df["年度"] == TEST_YEAR].reset_index(drop=True)
         pred_test   = _predict_with_nontaxable(model, test_df, test_df_raw, feat_cols)
         y_test      = test_df_raw[TARGET_COL].values
         metrics_test = print_metrics("テストデータ（実測値）", y_test, pred_test)
@@ -328,8 +328,8 @@ def main():
     show_years   = final_train_years if mode == "retrain_all" else TRAIN_YEARS + [TEST_YEAR]
 
     for yr in show_years:
-        yr_raw  = df[df["year"] == yr].reset_index(drop=True)
-        yr_corr = df_corrected[df_corrected["year"] == yr].reset_index(drop=True)
+        yr_raw  = df[df["年度"] == yr].reset_index(drop=True)
+        yr_corr = df_corrected[df_corrected["年度"] == yr].reset_index(drop=True)
         p_yr    = _predict_with_nontaxable(model, yr_corr, yr_raw, feat_cols)
         y_yr    = yr_raw[TARGET_COL].values
         act_b   = y_yr.sum() / 1e8
@@ -345,7 +345,7 @@ def main():
             tag = ""
         print(f"  {yr}年: 実測 {act_b:.2f}億 / 予測 {prd_b:.2f}億 / 誤差率 {err_r:+.2f}%  {tag}{note}")
         yearly_rows.append({
-            "year"           : yr,
+            "年度"           : yr,
             "actual_oku"     : round(act_b, 2),
             "pred_oku"       : round(prd_b, 2),
             "error_rate_pct" : round(err_r, 2),
@@ -362,10 +362,10 @@ def main():
         last_fold_preds.to_csv(VAL_PATH, index=False, encoding="utf-8-sig")
     else:
         ## standard / walkforward: 最終モデルの TEST_YEAR 予測を保存
-        test_df     = df_corrected[df_corrected["year"] == TEST_YEAR].reset_index(drop=True)
-        test_df_raw = df[df["year"] == TEST_YEAR].reset_index(drop=True)
+        test_df     = df_corrected[df_corrected["年度"] == TEST_YEAR].reset_index(drop=True)
+        test_df_raw = df[df["年度"] == TEST_YEAR].reset_index(drop=True)
         pred_test_final = _predict_with_nontaxable(model, test_df, test_df_raw, feat_cols)
-        result_df       = test_df_raw[["person_id", "year", TARGET_COL]].copy()
+        result_df       = test_df_raw[["仮ID", "年度", TARGET_COL]].copy()
         result_df["pred_tax"] = pred_test_final.round(0).astype(int)
         result_df["error"]    = result_df["pred_tax"] - result_df[TARGET_COL]
         result_df.to_csv(VAL_PATH, index=False, encoding="utf-8-sig")

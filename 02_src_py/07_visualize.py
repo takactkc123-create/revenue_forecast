@@ -51,18 +51,18 @@ AGE_ORDER = [
 def fig1_yearly_accuracy(yearly_df: pd.DataFrame, show: bool):
     """年度別合算精度: 実測 vs 予測 折れ線グラフ"""
     fig, ax = plt.subplots(figsize=(9, 5))
-    years = yearly_df["year"]
+    years = yearly_df["年度"]
     ax.plot(years, yearly_df["actual_oku"], "o-", label="実測", color="steelblue", linewidth=2)
     ax.plot(years, yearly_df["pred_oku"],   "s--", label="予測", color="coral",    linewidth=2)
 
     test_rows = yearly_df[yearly_df["is_test"]]
     if not test_rows.empty:
-        ax.axvline(test_rows["year"].min(), color="gray", linestyle=":", linewidth=1.2,
-                   label=f"テスト年（{test_rows['year'].min()}年）")
+        ax.axvline(test_rows["年度"].min(), color="gray", linestyle=":", linewidth=1.2,
+                   label=f"テスト年（{test_rows['年度'].min()}年）")
 
     for _, row in yearly_df.iterrows():
         err = f"{row['error_rate_pct']:+.1f}%"
-        ax.annotate(err, (row["year"], row["pred_oku"]),
+        ax.annotate(err, (row["年度"], row["pred_oku"]),
                     textcoords="offset points", xytext=(0, 8), ha="center", fontsize=8)
 
     ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:.1f}億"))
@@ -98,9 +98,9 @@ def fig2_error_distribution(val_df: pd.DataFrame, show: bool):
     ax.grid(axis="y", alpha=0.4)
 
     ax2 = axes[1]
-    mask   = val_df["tax_amount"] > 0
-    mape_v = ((val_df.loc[mask, "pred_tax"] - val_df.loc[mask, "tax_amount"])
-              / val_df.loc[mask, "tax_amount"] * 100).values
+    mask   = val_df["年税額"] > 0
+    mape_v = ((val_df.loc[mask, "pred_tax"] - val_df.loc[mask, "年税額"])
+              / val_df.loc[mask, "年税額"] * 100).values
     ax2.hist(mape_v, bins=60, color="coral", edgecolor="white", alpha=0.85)
     ax2.axvline(0, color="navy", linestyle="--", linewidth=1.2)
     ax2.set_xlabel("予測誤差率（%）")
@@ -123,12 +123,12 @@ def fig2_error_distribution(val_df: pd.DataFrame, show: bool):
 
 def fig3_age_breakdown(pred_df: pd.DataFrame, year: int, show: bool):
     """年齢区分別 合計税額の棒グラフ"""
-    if "age_group" not in pred_df.columns:
+    if "年齢区分" not in pred_df.columns:
         print("  age_group 列なし → fig3 スキップ")
         return
 
     summary = (
-        pred_df.groupby("age_group")["pred_tax_amount"]
+        pred_df.groupby("年齢区分")["pred_tax_amount"]
         .agg(合計_億円=lambda x: x.sum() / 1e8, 人員="count")
         .reindex(AGE_ORDER).dropna()
     )
@@ -282,11 +282,11 @@ def fig5_metrics_dashboard(val_df: pd.DataFrame, yearly_df: pd.DataFrame, show: 
     """評価指標ダッシュボード: テスト年の指標テーブル + 年度別誤差率棒グラフ"""
     # テスト年を特定
     test_mask = yearly_df["is_test"] if "is_test" in yearly_df.columns else pd.Series([False] * len(yearly_df))
-    test_year = int(yearly_df.loc[test_mask, "year"].iloc[0]) if test_mask.any() else int(yearly_df["year"].max())
+    test_year = int(yearly_df.loc[test_mask, "年度"].iloc[0]) if test_mask.any() else int(yearly_df["年度"].max())
 
     # 評価指標を計算
     errors = val_df["error"].values
-    y_true = val_df["tax_amount"].values
+    y_true = val_df["年税額"].values
     y_pred = val_df["pred_tax"].values
     mask   = y_true > 0
 
@@ -333,7 +333,7 @@ def fig5_metrics_dashboard(val_df: pd.DataFrame, yearly_df: pd.DataFrame, show: 
         "coral" if (row["is_test"] if "is_test" in yearly_df.columns else False) else "steelblue"
         for _, row in yearly_df.iterrows()
     ]
-    bars = ax2.bar(yearly_df["year"].astype(str), yearly_df["error_rate_pct"],
+    bars = ax2.bar(yearly_df["年度"].astype(str), yearly_df["error_rate_pct"],
                    color=bar_colors, alpha=0.85)
     ax2.bar_label(bars,
                   labels=[f"{v:+.2f}%" for v in yearly_df["error_rate_pct"]],
@@ -379,7 +379,7 @@ def fig6_tax_timeseries(yearly_df: pd.DataFrame, year: int, show: bool):
             pred_val = float(a["最終予測合計_億円"])
 
     # 実績系列（04out_yearly_result.csv の actual_oku）
-    hist_years = yearly_df["year"].tolist()
+    hist_years = yearly_df["年度"].tolist()
     hist_vals  = yearly_df["actual_oku"].tolist()
     all_years  = hist_years + [year]
     all_vals   = hist_vals  + [pred_val]

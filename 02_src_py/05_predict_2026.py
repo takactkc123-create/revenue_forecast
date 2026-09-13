@@ -62,9 +62,9 @@ def _estimate_housing_credit(
     n: int,
     rng: np.random.Generator,
 ) -> np.ndarray:
-    if "deduct_tax_housing" not in prev_df.columns:
+    if "住宅借入金特別控除" not in prev_df.columns:
         return np.zeros(n, dtype=int)
-    prev_housing = prev_df["deduct_tax_housing"].values.astype(float)
+    prev_housing = prev_df["住宅借入金特別控除"].values.astype(float)
     keep         = rng.random(n) >= HOUSING_PARAMS["annual_exit_rate"]
     result       = np.where(keep, prev_housing, 0.0)
     return np.minimum(result, HOUSING_PARAMS["upper_limit"]).round(0).astype(int)
@@ -87,8 +87,8 @@ def compute_conformal_interval(
         reform_type="label_correction",
     )
     df_corrected = apply_reforms(df_prep.copy(), label_reforms)
-    df_train     = df_corrected[df_corrected["year"].isin(config["train_years"])].copy()
-    df_test      = df_corrected[df_corrected["year"] == config["test_year"]].copy()
+    df_train     = df_corrected[df_corrected["年度"].isin(config["train_years"])].copy()
+    df_test      = df_corrected[df_corrected["年度"] == config["test_year"]].copy()
 
     model_c = lgb.LGBMRegressor(**config["lgbm_params"])
     model_c.fit(
@@ -100,7 +100,7 @@ def compute_conformal_interval(
         model_c.predict(df_test[feature_cols].fillna(0).values),
         config["min_tax"],
     )
-    actual_calib = df_prep[df_prep["year"] == config["test_year"]][TARGET_COL].values
+    actual_calib = df_prep[df_prep["年度"] == config["test_year"]][TARGET_COL].values
     scores = np.abs(actual_calib - pred_calib)
     q      = float(np.quantile(scores, coverage))
     return q, scores
@@ -113,17 +113,17 @@ def estimate_next_year(
     wage_rate: float | None,
     wage_delta: float,
 ) -> pd.DataFrame:
-    last_year = df["year"].max()
-    base_df   = df[df["year"] == last_year].copy()
+    last_year = df["年度"].max()
+    base_df   = df[df["年度"] == last_year].copy()
 
-    has_gross        = "income_salary_gross" in df.columns
-    salary_trend_col = "income_salary_gross" if has_gross else "income_salary"
+    has_gross        = "給与収入" in df.columns
+    salary_trend_col = "給与収入" if has_gross else "給与所得"
 
-    trend_cols = [salary_trend_col, "income_business", "income_pension", "income_total"]
+    trend_cols = [salary_trend_col, "事業所得_営業等", "雑所得_公的年金等", "総所得金額等"]
     yoy_rates  = {}
     for col in trend_cols:
         if col in df.columns:
-            yr_means = df.groupby("year")[col].mean()
+            yr_means = df.groupby("年度")[col].mean()
             yoy_rates[col] = (
                 float(yr_means.pct_change().dropna().tail(2).mean())
                 if len(yr_means) >= 2 else 0.0
@@ -141,93 +141,93 @@ def estimate_next_year(
         eff_wage_rate = base_wage_rate
         print(f"  給与収入上昇率（実績トレンド直近2年平均）: {eff_wage_rate*100:+.2f}%")
 
-    for col in ["income_business", "income_pension", "income_total"]:
+    for col in ["事業所得_営業等", "雑所得_公的年金等", "総所得金額等"]:
         if col in yoy_rates:
             print(f"  {col}: {yoy_rates[col]*100:+.2f}%")
 
     rng     = np.random.default_rng(42)
     next_df = base_df.copy()
-    next_df["year"]              = target_year
-    next_df["prev_income_total"] = next_df["income_total"]
-    next_df["prev_tax_amount"]   = next_df["tax_amount"]
-    if "taxable_income" in next_df.columns:
-        next_df["prev_taxable_income"] = next_df["taxable_income"]
-    next_df["is_continuing"] = 1
+    next_df["年度"]              = target_year
+    next_df["前年_総所得金額等"] = next_df["総所得金額等"]
+    next_df["前年_年税額"]   = next_df["年税額"]
+    if "課税標準額" in next_df.columns:
+        next_df["前年_課税標準額"] = next_df["課税標準額"]
+    next_df["継続者フラグ"] = 1
 
     noise = rng.normal(1.0, 0.02, size=len(next_df))
 
     if has_gross:
-        next_df["income_salary_gross"] = (
-            next_df["income_salary_gross"] * (1 + eff_wage_rate) * noise
+        next_df["給与収入"] = (
+            next_df["給与収入"] * (1 + eff_wage_rate) * noise
         ).clip(0).round(0).astype(int)
-        next_df["income_salary"] = (
-            compute_salary_income(next_df["income_salary_gross"].values, year=target_year)
+        next_df["給与所得"] = (
+            compute_salary_income(next_df["給与収入"].values, year=target_year)
         ).round(0).astype(int)
     else:
-        next_df["income_salary"] = (
-            next_df["income_salary"] * (1 + eff_wage_rate) * noise
+        next_df["給与所得"] = (
+            next_df["給与所得"] * (1 + eff_wage_rate) * noise
         ).clip(0).round(0).astype(int)
 
     # 事業所得・年金収入（gross）にトレンドを適用。年金所得は収入から再計算
-    for col in ["income_business", "income_pension_gross"]:
+    for col in ["事業所得_営業等", "雑収入_公的年金等"]:
         if col in next_df.columns:
             rate  = yoy_rates.get(col, 0.0)
             noise = rng.normal(1.0, 0.02, size=len(next_df))
             next_df[col] = (next_df[col] * (1 + rate) * noise).clip(0).round(0).astype(int)
-    if "income_pension_gross" in next_df.columns:
+    if "雑収入_公的年金等" in next_df.columns:
         from tax_reform import compute_pension_income
-        next_df["income_pension"] = compute_pension_income(
-            next_df["income_pension_gross"].values, next_df["age"].values
+        next_df["雑所得_公的年金等"] = compute_pension_income(
+            next_df["雑収入_公的年金等"].values, next_df["年齢"].values
         ).round(0).astype(int)
-    elif "income_pension" in next_df.columns:
-        rate  = yoy_rates.get("income_pension", 0.0)
+    elif "雑所得_公的年金等" in next_df.columns:
+        rate  = yoy_rates.get("雑所得_公的年金等", 0.0)
         noise = rng.normal(1.0, 0.02, size=len(next_df))
-        next_df["income_pension"] = (next_df["income_pension"] * (1 + rate) * noise).clip(0).round(0).astype(int)
+        next_df["雑所得_公的年金等"] = (next_df["雑所得_公的年金等"] * (1 + rate) * noise).clip(0).round(0).astype(int)
 
     inc_cols = [c for c in ALL_INCOME_COLS if c in next_df.columns]
-    next_df["income_total"] = next_df[inc_cols].sum(axis=1)
-    next_df["income_yoy_change"] = next_df["income_total"] - next_df["prev_income_total"]
+    next_df["総所得金額等"] = next_df[inc_cols].sum(axis=1)
+    next_df["総所得金額等_前年差"] = next_df["総所得金額等"] - next_df["前年_総所得金額等"]
 
     gross_for_deduct = (
-        next_df["income_salary_gross"] if has_gross else next_df["income_salary"]
+        next_df["給与収入"] if has_gross else next_df["給与所得"]
     )
-    next_df["deduct_social_ins"] = (gross_for_deduct * 0.14).round(0).astype(int)
-    next_df["deduct_basic"]      = (
-        compute_basic_deduction(next_df["income_total"].values)
+    next_df["社会保険料控除"] = (gross_for_deduct * 0.14).round(0).astype(int)
+    next_df["基礎控除"]      = (
+        compute_basic_deduction(next_df["総所得金額等"].values)
     ).round(0).astype(int)
 
     deduct_cols = [
-        "deduct_social_ins", "deduct_small_biz_ins", "deduct_life_ins",
-        "deduct_earthquake_ins", "deduct_casualty", "deduct_medical",
-        "deduct_disability", "deduct_widow", "deduct_spouse", "deduct_spouse_special",
-        "deduct_dependent", "deduct_basic", "deduct_working_student",
-        "deduct_donation_income",
+        "社会保険料控除", "小規模企業共済等掛金控除", "生命保険料控除",
+        "地震保険料控除", "雑損控除", "医療費控除",
+        "障害者控除", "寡婦控除", "配偶者控除", "配偶者特別控除",
+        "扶養控除", "基礎控除", "勤労学生控除",
+        "寄附金控除",
     ]
-    next_df["deduct_total"] = sum(
+    next_df["差引所得控除合計"] = sum(
         next_df[c] for c in deduct_cols if c in next_df.columns
     )
 
-    safe_total = next_df["income_total"].replace(0, np.nan)
-    next_df["deduct_rate"]  = (next_df["deduct_total"] / safe_total).fillna(0).clip(0, 1)
-    next_df["taxable_income"] = (
-        next_df["income_total"] - next_df["deduct_total"]
+    safe_total = next_df["総所得金額等"].replace(0, np.nan)
+    next_df["所得控除率"]  = (next_df["差引所得控除合計"] / safe_total).fillna(0).clip(0, 1)
+    next_df["課税標準額"] = (
+        next_df["総所得金額等"] - next_df["差引所得控除合計"]
     ).clip(0).round(0).astype(int)
-    next_df["taxable_rate"] = (
-        next_df["taxable_income"] / safe_total
+    next_df["課税標準率"] = (
+        next_df["課税標準額"] / safe_total
     ).fillna(0).clip(0, 1)
 
     # 税額控除推計
     print("  税額控除推計:")
-    next_df["deduct_tax_housing"] = _estimate_housing_credit(base_df, len(next_df), rng)
-    next_df["deduct_tax_furusato"] = estimate_furusato_resident_deduction(
-        next_df["taxable_income"].values,
+    next_df["住宅借入金特別控除"] = _estimate_housing_credit(base_df, len(next_df), rng)
+    next_df["寄附金税額控除"] = estimate_furusato_resident_deduction(
+        next_df["課税標準額"].values,
         donation_rate=FURUSATO_PARAMS["donation_rate"],
         one_stop_ratio=FURUSATO_PARAMS["one_stop_ratio"],
     ).astype(int)
 
-    n_h   = int((next_df["deduct_tax_housing"]  > 0).sum())
-    oku_h = next_df["deduct_tax_housing"].sum()  / 1e8
-    oku_f = next_df["deduct_tax_furusato"].sum() / 1e8
+    n_h   = int((next_df["住宅借入金特別控除"]  > 0).sum())
+    oku_h = next_df["住宅借入金特別控除"].sum()  / 1e8
+    oku_f = next_df["寄附金税額控除"].sum() / 1e8
     print(f"    住宅ローン控除  : {oku_h:.3f}億円 ({n_h:,}人対象)")
     print(f"    ふるさと納税控除: {oku_f:.3f}億円 (寄付率 {FURUSATO_PARAMS['donation_rate']*100:.1f}%)")
 
@@ -270,7 +270,7 @@ def main():
     )
     df_for_train = apply_reforms(df_prep.copy(), label_reforms)
     model        = lgb.LGBMRegressor(**config["lgbm_params"])
-    all_years    = sorted(df_for_train["year"].unique().tolist())
+    all_years    = sorted(df_for_train["年度"].unique().tolist())
     print(f"全年度再学習中... {all_years}（{len(df_for_train):,} 件）")
     model.fit(
         df_for_train[feature_cols].values,
@@ -316,9 +316,9 @@ def main():
         feature_reforms = load_reforms(
             REFORM_CONFIG_PATH, target_year=args.year, reform_type="feature_correction"
         )
-        # income_salary_gross がある場合は estimate_next_year が既に正確な計算式を
+        # 給与収入 がある場合は estimate_next_year が既に正確な計算式を
         # 適用済みのため salary_deduction_floor の二重適用を防ぐ
-        has_gross = "income_salary_gross" in pred_df.columns
+        has_gross = "給与収入" in pred_df.columns
         if has_gross:
             skipped = [r for r in feature_reforms if r["name"] == "salary_deduction_floor"]
             feature_reforms = [r for r in feature_reforms if r["name"] != "salary_deduction_floor"]
@@ -337,11 +337,11 @@ def main():
 
     # ── 非課税者の予測・信頼区間を 0 に上書き ────────────────────────────────
     # MIN_TAX（均等割）は課税者の下限。非課税基準以下の人には適用しない。
-    _nd = pred_df_out["n_dependent"].values if "n_dependent" in pred_df_out.columns \
-        else (pred_df_out["deduct_dependent"].values / 330_000).round().astype(int)
+    _nd = pred_df_out["扶養人数"].values if "扶養人数" in pred_df_out.columns \
+        else (pred_df_out["扶養控除"].values / 330_000).round().astype(int)
     _non_taxable = compute_non_taxable_flag(
-        pred_df_out["income_total"].values, _nd,
-        (pred_df_out["deduct_spouse"].values > 0).astype(int),
+        pred_df_out["総所得金額等"].values, _nd,
+        (pred_df_out["配偶者控除"].values > 0).astype(int),
     )
     pred_tax       = np.where(_non_taxable, 0, pred_tax)
     pred_tax_lower = np.where(_non_taxable, 0, pred_tax_lower)
@@ -349,13 +349,13 @@ def main():
     total_oku      = pred_tax.sum() / 1e8
 
     last_year_total = (
-        df_prep[df_prep["year"] == df_prep["year"].max()][TARGET_COL].sum() / 1e8
+        df_prep[df_prep["年度"] == df_prep["年度"].max()][TARGET_COL].sum() / 1e8
     )
     diff = total_oku - last_year_total
 
     # ── 結果表示 ─────────────────────────────────────────────────────────────
     print(f"\n{'='*60}")
-    print(f"  前年実績（{df_prep['year'].max()}年）    : {last_year_total:>8.2f} 億円")
+    print(f"  前年実績（{df_prep['年度'].max()}年）    : {last_year_total:>8.2f} 億円")
     if feature_reforms:
         reform_effect = total_oku - total_pre_oku
         print(f"  税制改正補正前（推計ベース）: {total_pre_oku:>8.2f} 億円")
@@ -371,18 +371,18 @@ def main():
 
     # 年齢区分別内訳
     print("\n── 年齢区分別内訳 ──")
-    age_col = "age_group" if "age_group" in pred_df_out.columns else None
+    age_col = "年齢区分" if "年齢区分" in pred_df_out.columns else None
     if age_col:
-        print(pred_df_out.assign(pred_tax_amount=pred_tax).groupby("age_group")["pred_tax_amount"].agg(
+        print(pred_df_out.assign(pred_tax_amount=pred_tax).groupby("年齢区分")["pred_tax_amount"].agg(
             人員="count",
             合計_億円=lambda x: round(x.sum() / 1e8, 2),
             平均_万円=lambda x: round(x.mean() / 1e4, 1),
         ).to_string())
 
     # CSV 出力
-    out_cols = ["person_id", "year"]
-    for c in ["age_group", "income_total", "taxable_income", "collection_type",
-              "deduct_tax_furusato", "deduct_tax_housing"]:
+    out_cols = ["仮ID", "年度"]
+    for c in ["年齢区分", "総所得金額等", "課税標準額", "徴収区分",
+              "寄附金税額控除", "住宅借入金特別控除"]:
         if c in pred_df_out.columns:
             out_cols.append(c)
 

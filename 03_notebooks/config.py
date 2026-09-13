@@ -51,114 +51,114 @@ LGBM_PARAMS = {
     "n_jobs"           : -1,
 }
 
-# ─── 所得合計に含める全所得列（income_total の計算に使用。pension_gross は除く）──
+# ─── 所得合計に含める全所得列（総所得金額等 の計算に使用。pension_gross は除く）──
 # 01_generate_dummy / 03_feature_eng / 05_predict_2026 / tax_reform で共有
 ALL_INCOME_COLS = [
-    "income_salary",        # 給与所得
-    "income_business",      # 事業所得_営業等
-    "income_farming",       # 事業所得_農業
-    "income_property",      # 不動産所得
-    "income_interest",      # 利子所得
-    "income_dividend",      # 配当所得（総合課税）
-    "income_pension",       # 雑所得_公的年金等（控除後）
-    "income_misc_business", # 雑所得_業務
-    "income_other",         # 雑所得_その他
-    "income_stcg",          # 総合短期譲渡所得
-    "income_ltcg",          # 総合長期譲渡所得
-    "income_occasional",    # 一時所得
-    "sep_stcg_general",     # 分離_短期譲渡一般
-    "sep_stcg_reduced",     # 分離_短期譲渡軽減
-    "sep_ltcg_general",     # 分離_長期譲渡一般
-    "sep_ltcg_specific",    # 分離_長期譲渡特定
-    "sep_ltcg_reduced",     # 分離_長期譲渡軽減
-    "sep_stock_general",    # 分離_一般株式譲渡
-    "sep_stock_listed",     # 分離_特定株式譲渡
-    "sep_dividend_listed",  # 分離_上場株式配当
-    "sep_futures",          # 分離_先物取引
-    "sep_forestry",         # 分離_山林
+    "給与所得",        # 給与所得
+    "事業所得_営業等",      # 事業所得_営業等
+    "事業所得_農業",       # 事業所得_農業
+    "不動産所得",      # 不動産所得
+    "利子所得",      # 利子所得
+    "配当所得",      # 配当所得（総合課税）
+    "雑所得_公的年金等",       # 雑所得_公的年金等（控除後）
+    "雑所得_業務", # 雑所得_業務
+    "雑所得_その他",         # 雑所得_その他
+    "総合短期譲渡所得",          # 総合短期譲渡所得
+    "総合長期譲渡所得",          # 総合長期譲渡所得
+    "一時所得",    # 一時所得
+    "分離_短期譲渡一般",     # 分離_短期譲渡一般
+    "分離_短期譲渡軽減",     # 分離_短期譲渡軽減
+    "分離_長期譲渡一般",     # 分離_長期譲渡一般
+    "分離_長期譲渡特定",    # 分離_長期譲渡特定
+    "分離_長期譲渡軽減",     # 分離_長期譲渡軽減
+    "分離_一般株式譲渡",    # 分離_一般株式譲渡
+    "分離_特定株式譲渡",     # 分離_特定株式譲渡
+    "分離_上場株式配当",  # 分離_上場株式配当
+    "分離_先物取引",          # 分離_先物取引
+    "分離_山林",         # 分離_山林
 ]
 
 # ─── 特徴量列（03_feature_eng.py で生成・04_model_train.py で使用）─────────────
-# ※ 除外列: muni_kintowari / muni_tokuwari / pref_kintowari / pref_tokuwari
+# ※ 除外列: 市町村_均等割 / 市町村_所得割 / 都道府県_均等割 / 都道府県_所得割
 #   均等割・所得割の合計 = 年税額（目的変数）のため説明変数に使うと完全なリークになる
 #   これらは03_feature_eng.pyでdrop済み
 FEATURE_COLS = [
     # 属性
-    "gender",
+    "性別",
     # 収入（確定申告書第1表「収入金額等」）
-    "income_salary_gross",       # 給与収入
-    "income_pension_gross",      # 雑収入_公的年金等（公的年金等控除前）
+    "給与収入",       # 給与収入
+    "雑収入_公的年金等",      # 雑収入_公的年金等（公的年金等控除前）
     # 所得（確定申告書第1表「所得金額等」）
-    "income_salary",             # 給与所得
-    "income_business",           # 事業所得_営業等
-    "income_farming",            # 事業所得_農業
-    "income_property",           # 不動産所得
-    "income_interest",           # 利子所得
-    "income_dividend",           # 配当所得（総合課税）
-    "income_pension",            # 雑所得_公的年金等（控除後）
-    "income_misc_business",      # 雑所得_業務
-    "income_other",              # 雑所得_その他
-    "income_stcg",               # 総合短期譲渡所得
-    "income_ltcg",               # 総合長期譲渡所得
-    "income_occasional",         # 一時所得
-    "income_total",              # 合計所得金額（03で生成）
+    "給与所得",             # 給与所得
+    "事業所得_営業等",           # 事業所得_営業等
+    "事業所得_農業",            # 事業所得_農業
+    "不動産所得",           # 不動産所得
+    "利子所得",           # 利子所得
+    "配当所得",           # 配当所得（総合課税）
+    "雑所得_公的年金等",            # 雑所得_公的年金等（控除後）
+    "雑所得_業務",      # 雑所得_業務
+    "雑所得_その他",              # 雑所得_その他
+    "総合短期譲渡所得",               # 総合短期譲渡所得
+    "総合長期譲渡所得",               # 総合長期譲渡所得
+    "一時所得",         # 一時所得
+    "総所得金額等",              # 合計所得金額（03で生成）
     # 分離課税所得
-    "sep_stcg_general",          # 分離_短期譲渡一般
-    "sep_stcg_reduced",          # 分離_短期譲渡軽減
-    "sep_ltcg_general",          # 分離_長期譲渡一般
-    "sep_ltcg_specific",         # 分離_長期譲渡特定
-    "sep_ltcg_reduced",          # 分離_長期譲渡軽減
-    "sep_stock_general",         # 分離_一般株式譲渡
-    "sep_stock_listed",          # 分離_特定株式譲渡
-    "sep_dividend_listed",       # 分離_上場株式配当
-    "sep_futures",               # 分離_先物取引
-    "sep_forestry",              # 分離_山林
+    "分離_短期譲渡一般",          # 分離_短期譲渡一般
+    "分離_短期譲渡軽減",          # 分離_短期譲渡軽減
+    "分離_長期譲渡一般",          # 分離_長期譲渡一般
+    "分離_長期譲渡特定",         # 分離_長期譲渡特定
+    "分離_長期譲渡軽減",          # 分離_長期譲渡軽減
+    "分離_一般株式譲渡",         # 分離_一般株式譲渡
+    "分離_特定株式譲渡",          # 分離_特定株式譲渡
+    "分離_上場株式配当",       # 分離_上場株式配当
+    "分離_先物取引",               # 分離_先物取引
+    "分離_山林",              # 分離_山林
     # 所得種別フラグ（03で生成）
-    "has_salary",
-    "has_business",
-    "has_pension",
-    "has_property",
-    "has_dividend",
-    "has_sep_income",            # 分離課税所得ありフラグ
+    "給与所得有無",
+    "事業所得有無",
+    "年金所得有無",
+    "不動産所得有無",
+    "配当所得有無",
+    "分離所得有無",            # 分離課税所得ありフラグ
     # 所得控除（確定申告書第1表「所得から差し引かれる金額」）
-    "deduct_social_ins",         # 社会保険料控除
-    "deduct_small_biz_ins",      # 小規模企業共済等掛金控除
-    "deduct_life_ins",           # 生命保険料控除（住民税上限7万円 ※一般・介護医療・個人年金の3区分合計）
-    "deduct_earthquake_ins",     # 地震保険料控除（住民税上限2.5万円）
-    "deduct_casualty",           # 雑損控除
-    "deduct_medical",            # 医療費控除
-    "deduct_disability",         # 障害者控除
-    "deduct_widow",              # 寡婦・ひとり親控除
-    "deduct_spouse",             # 配偶者控除
-    "deduct_spouse_special",     # 配偶者特別控除
-    "deduct_dependent",          # 扶養控除
-    "deduct_basic",              # 基礎控除
-    "deduct_working_student",    # 勤労学生控除
-    "deduct_donation_income",    # 寄附金控除（所得控除）
-    "deduct_total",              # 所得控除合計（03で生成）
+    "社会保険料控除",         # 社会保険料控除
+    "小規模企業共済等掛金控除",      # 小規模企業共済等掛金控除
+    "生命保険料控除",           # 生命保険料控除（住民税上限7万円 ※一般・介護医療・個人年金の3区分合計）
+    "地震保険料控除",     # 地震保険料控除（住民税上限2.5万円）
+    "雑損控除",           # 雑損控除
+    "医療費控除",            # 医療費控除
+    "障害者控除",         # 障害者控除
+    "寡婦控除",              # 寡婦・ひとり親控除
+    "配偶者控除",             # 配偶者控除
+    "配偶者特別控除",     # 配偶者特別控除
+    "扶養控除",          # 扶養控除
+    "基礎控除",              # 基礎控除
+    "勤労学生控除",    # 勤労学生控除
+    "寄附金控除",    # 寄附金控除（所得控除）
+    "差引所得控除合計",              # 所得控除合計（03で生成）
     # 税額控除
-    "deduct_tax_housing",        # 住宅借入金等特別控除（住民税分）
-    "deduct_tax_furusato",       # ふるさと納税控除（住民税分）
-    "taxcredit_adjustment",      # 調整控除
-    "taxcredit_dividend",        # 配当控除
-    "taxcredit_foreign",         # 外国税額控除
-    "taxcredit_dividend_split",  # 配当割額・株式等譲渡所得割額の控除
+    "住宅借入金特別控除",        # 住宅借入金等特別控除（住民税分）
+    "寄附金税額控除",       # ふるさと納税控除（住民税分）
+    "調整控除",      # 調整控除
+    "配当控除",        # 配当控除
+    "外国税額控除",         # 外国税額控除
+    "配当割額・株式等譲渡所得割額の控除",  # 配当割額・株式等譲渡所得割額の控除
     # 比率特徴量（03で生成）
-    "deduct_rate",
-    "taxable_rate",
+    "所得控除率",
+    "課税標準率",
     # 課税所得
-    "taxable_income",
+    "課税標準額",
     # 属性・前年比
-    "age_num",
-    "is_tokubetsu",
-    "is_continuing",
-    "income_yoy_change",
-    "prev_income_total",
-    "prev_tax_amount",
-    "prev_taxable_income",
+    "年齢区分番号",
+    "特別徴収フラグ",
+    "継続者フラグ",
+    "総所得金額等_前年差",
+    "前年_総所得金額等",
+    "前年_年税額",
+    "前年_課税標準額",
 ]
 
-TARGET_COL = "tax_amount"
+TARGET_COL = "年税額"
 
 # ─── ふるさと納税 推計パラメータ ──────────────────────────────────────────────
 # ※ 以下は概算値。実データで実績が算出できたら上書きすること。
