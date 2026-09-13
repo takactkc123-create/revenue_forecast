@@ -578,6 +578,24 @@ WF_MIN_TRAIN_YEARS = 2              # fold1 の最低訓練年数
 ```
 
 
+### 特徴量を追加・削除したいとき
+
+モデルに使う列は`config.py`の2つの一覧で管理し、`FEATURE_COLS`はその2つをつないだものになっている。
+
+```python
+# config.py
+RAW_FEATURE_COLS = [...]        # 元データ（01の出力・実データのSQL抽出）にある列のうち、モデルに使うもの
+GENERATED_FEATURE_COLS = [...]  # 03_feature_eng.py の preprocess() が作る列
+FEATURE_COLS = RAW_FEATURE_COLS + GENERATED_FEATURE_COLS
+```
+
+- **元データにある列を使う・外す**：`RAW_FEATURE_COLS`に書き足す・消すだけでよい。
+- **03で新しい列を作る**：`03_feature_eng.py`の`preprocess()`に処理を書き、`GENERATED_FEATURE_COLS`にも同じ列名を書き足す。
+- **03で作っている列を外す**：`preprocess()`の処理と`GENERATED_FEATURE_COLS`の両方から消す。
+- `03`は`preprocess()`の最後に、`GENERATED_FEATURE_COLS`と実際に作った列が一致するかを確認し、ずれていればどの列かを表示してエラーで止まる（片方だけ直し忘れて、`04`で特徴量が黙って欠けるのを防ぐため）。
+- `03_notebooks/`版を使う場合は、`03_notebooks/config.py`と`03_feature_eng.ipynb`にも同じ変更を反映する。
+- 並び順を変えるとモデルの入力の並びも変わるため、変更後は`04`→`05`を実行し直す。
+
 ### 税制改正に対応したいとき
 
 1. `data/tax_reform_config.csv` に行を追加（`reform_name`, `effective_year`, `param_key`, `param_value` 等）

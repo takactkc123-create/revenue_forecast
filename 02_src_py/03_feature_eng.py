@@ -42,11 +42,13 @@ from tax_reform import (
 from config import (
     RAW_DATA_PATH, PREPARED_DATA_PATH, SUMMARY_PATH,
     FURUSATO_PARAMS, AGE_MAP, ALL_INCOME_COLS,
+    RAW_FEATURE_COLS, GENERATED_FEATURE_COLS,
 )
 
 
 def preprocess(df: pd.DataFrame) -> pd.DataFrame:
     df = df.sort_values(["仮ID", "年度"]).reset_index(drop=True)
+    before_cols = set(df.columns)   # 2026-09-13追加: 作った列を最後に確認するため、処理前の列を記録
 
     # ── リーク列の除外 ──────────────────────────────────────────────────────────
     # 均等割・所得割の合計 = 年税額（目的変数）のため説明変数に使用しない
@@ -171,6 +173,16 @@ def preprocess(df: pd.DataFrame) -> pd.DataFrame:
     # 効果: 除外しても MAE -5円 / WMAPE -0.002pt と精度が落ちず、重要度0.25%とほぼ未使用。
     #       元の 徴収区分 列と情報が重複している。
     df["特別徴収フラグ"] = (df["徴収区分"] == 1).astype(int)
+
+    # ── config.py の GENERATED_FEATURE_COLS と、実際に作った列が一致するか確認（2026-09-13追加）──
+    # ずれたまま進むと、04は「列なし（スキップ）」と表示するだけで学習を続け、特徴量が黙って欠けるため、ここで止める。
+    # RAW_FEATURE_COLS も差し引くのは、実データ向けに「列がなければ補う」基礎控除等を一覧外の新規列と誤判定しないため。
+    not_created = [c for c in GENERATED_FEATURE_COLS if c not in df.columns]
+    unlisted = sorted(set(df.columns) - before_cols - set(GENERATED_FEATURE_COLS) - set(RAW_FEATURE_COLS))
+    if not_created:
+        raise ValueError(f"config.py の GENERATED_FEATURE_COLS にあるのに03で作っていない列: {not_created}")
+    if unlisted:
+        raise ValueError(f"03で作ったのに config.py の GENERATED_FEATURE_COLS に書いていない列: {unlisted}")
 
     return df
 
