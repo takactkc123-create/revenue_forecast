@@ -1,6 +1,7 @@
 data/
 
-models/
+models/*
+!models/model_config.json
 
 __pycache__/
 *.pyc
