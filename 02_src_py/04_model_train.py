@@ -57,14 +57,17 @@ WF_PATH     = "data/04out_walkforward_result.csv"
 
 # ─── 精度指標 ──────────────────────────────────────────────────────────────────
 
-## 課税者のみの MAPE（非課税者は除外）
+## 課税者1人ひとりの誤差率を同じ重みで平均（人数ベース）。
+## 実績0円は分母にできないため除外 → 非課税者を課税と誤予測しても反映されない。
+## 少額納税者のわずかな外れで大きくなりやすく、高額納税者の外れはほぼ効かない。
 def mape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     mask = y_true > 0
     return float(np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100)
 
-## 非課税者(0円)を含む加重平均絶対誤差率。集計誤差率と等価で税収予測の主指標。
+## Σ|誤差|÷Σ実績 ＝ 各人の誤差率を実績の税額で重み付けした平均（円ベース。税収と同じ視点）。
+## 0円の人の誤差も円で分子に入る。高額納税者の外れは税額に比例して効く（二乗するRMSEほどではない）。
+## 打ち消し合いを含まないため集計誤差率の上限（全員が同じ向きに外れた場合に一致）。主指標は集計誤差率。
 def wmape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    """非課税者(0円)を含む加重平均絶対誤差率。集計誤差率と等価で税収予測の主指標。"""
     total = np.sum(np.abs(y_true))
     return float(np.sum(np.abs(y_true - y_pred)) / total * 100) if total > 0 else float("nan")
 
@@ -79,7 +82,7 @@ def print_metrics(label: str, y_true: np.ndarray, y_pred: np.ndarray) -> dict:
     print(f"    MAE   : {mae_val:>12,.0f} 円")
     print(f"    RMSE  : {rmse_val:>12,.0f} 円")
     print(f"    MAPE  : {mape_val:>8.2f} %  ← 課税者のみ（非課税除外）")
-    print(f"    WMAPE : {wmape_val:>8.2f} %  ← 非課税含む・集計誤差率と等価")
+    print(f"    WMAPE : {wmape_val:>8.2f} %  ← 非課税含む・集計誤差率の上限")
     print(f"    R2    : {r2_val:>8.3f}")
     return {"label": label, "MAE": mae_val, "RMSE": rmse_val,
             "MAPE": mape_val, "WMAPE": wmape_val, "R2": r2_val}

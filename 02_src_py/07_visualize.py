@@ -294,6 +294,8 @@ def fig5_metrics_dashboard(val_df: pd.DataFrame, yearly_df: pd.DataFrame, show: 
     rmse  = np.sqrt((errors ** 2).mean())
     mape  = np.abs((y_pred[mask] - y_true[mask]) / y_true[mask]).mean() * 100 if mask.any() else float("nan")
     wmape = np.sum(np.abs(errors)) / np.sum(np.abs(y_true)) * 100 if y_true.sum() > 0 else float("nan")
+    # 集計誤差率（符号付き）: error = 予測 − 実績 なので + は過大予測。個人ごとの誤差のプラス・マイナスが打ち消し合う
+    agg   = errors.sum() / y_true.sum() * 100 if y_true.sum() > 0 else float("nan")
     ss_res = np.sum(errors ** 2)
     ss_tot = np.sum((y_true - y_true.mean()) ** 2)
     r2    = 1 - ss_res / ss_tot if ss_tot > 0 else float("nan")
@@ -304,10 +306,11 @@ def fig5_metrics_dashboard(val_df: pd.DataFrame, yearly_df: pd.DataFrame, show: 
     ax = axes[0]
     ax.axis("off")
     table_data = [
+        ["集計誤差率", f"{agg:>+9.2f} %", "税収合計の誤差率（主指標）"],
+        ["WMAPE", f"{wmape:>9.2f} %",  "集計誤差率の上限"],
+        ["MAPE",  f"{mape:>9.2f} %",   "課税者のみの誤差率"],
         ["MAE",   f"{mae:>10,.0f} 円", "個人税額の平均絶対誤差"],
         ["RMSE",  f"{rmse:>10,.0f} 円", "外れ値に敏感な誤差指標"],
-        ["MAPE",  f"{mape:>9.2f} %",   "課税者のみの誤差率"],
-        ["WMAPE", f"{wmape:>9.2f} %",  "税収合計の誤差率（主指標）"],
         ["R²",    f"{r2:>11.4f}",      "予測の当てはまり度"],
     ]
     table = ax.table(
@@ -322,8 +325,8 @@ def fig5_metrics_dashboard(val_df: pd.DataFrame, yearly_df: pd.DataFrame, show: 
     for j in range(3):
         table[(0, j)].set_facecolor("#2c5f8a")
         table[(0, j)].set_text_props(color="white", fontweight="bold")
-    for j in range(3):  # WMAPE 行をハイライト（ヘッダー含め4行目 = index 4）
-        table[(4, j)].set_facecolor("#fff3cd")
+    for j in range(3):  # 主指標の集計誤差率の行をハイライト（ヘッダーの次 = index 1）
+        table[(1, j)].set_facecolor("#fff3cd")
     ax.set_title(f"テスト年（{test_year}年）モデル評価指標",
                  fontsize=12, fontweight="bold", pad=20)
 
