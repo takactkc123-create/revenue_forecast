@@ -10,6 +10,12 @@ import seaborn as sns
 import warnings
 warnings.filterwarnings("ignore")
 
+# data/ 等の相対パスはカレントディレクトリ基準のため、02_src_py/ の中から実行した場合は
+# プロジェクトルートへ戻す（2026-09-17追加）。ルートから実行した場合は何もしない。
+# import は sys.path（スクリプトの置き場所）を見るため、chdir しても config / tax_reform は読める。
+if os.path.basename(os.getcwd()) == "02_src_py":
+    os.chdir("..")
+
 from tax_reform import compute_income_tax_rate
 
 print("Python version:", sys.version)

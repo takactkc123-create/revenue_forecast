@@ -14,9 +14,10 @@
   6. 信頼区間分布（幅のヒストグラム + 年齢区分別箱ひげ図）← 05 の 05out_prediction_YYYY.csv
 
 【使い方】
-  python 07_visualize.py
-  python 07_visualize.py --year 2026
-  python 07_visualize.py --no-show   # 画面表示せず保存のみ
+  ※ 02_src_py/ の中で実行する例。プロジェクトルートからは uv run python 02_src_py/07_visualize.py でも実行できる。
+  uv run python 07_visualize.py
+  uv run python 07_visualize.py --year 2026
+  uv run python 07_visualize.py --no-show   # 画面表示せず保存のみ
 """
 
 import argparse
@@ -28,6 +29,12 @@ import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 from matplotlib.patches import Patch
+
+# data/ 等の相対パスはカレントディレクトリ基準のため、02_src_py/ の中から実行した場合は
+# プロジェクトルートへ戻す（2026-09-17追加）。ルートから実行した場合は何もしない。
+# import は sys.path（スクリプトの置き場所）を見るため、chdir しても config / tax_reform は読める。
+if os.path.basename(os.getcwd()) == "02_src_py":
+    os.chdir("..")
 
 from config import PREDICT_YEAR
 

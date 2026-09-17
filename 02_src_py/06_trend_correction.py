@@ -21,10 +21,11 @@
   data/06out_prediction_adjusted_summary_YYYY.csv  ← 補正後の合計サマリー
 
 【使い方】
-  python 06_trend_correction.py
-  python 06_trend_correction.py --year 2026
-  python 06_trend_correction.py --no-trend   # トレンド補正をスキップ
-  python 06_trend_correction.py --factor 0.98  # トレンド補正乗率を直接指定
+  ※ 02_src_py/ の中で実行する例。プロジェクトルートからは uv run python 02_src_py/06_trend_correction.py でも実行できる。
+  uv run python 06_trend_correction.py
+  uv run python 06_trend_correction.py --year 2026
+  uv run python 06_trend_correction.py --no-trend   # トレンド補正をスキップ
+  uv run python 06_trend_correction.py --factor 0.98  # トレンド補正乗率を直接指定
 
 【人口減少（死亡・転出）を反映したいとき → --factor を使う】 2026-09-12追記
   05 は「予測年の対象者 ＝ 直近年の対象者そのまま」という前提で予測する
@@ -33,8 +34,8 @@
   このため人口が減少している自治体では予測が過大になる。その分を打ち消すには
   --factor に「1 − 想定減少率」を渡す。
 
-    python 06_trend_correction.py --factor 0.988   # 対象者が年1.2%減る想定
-    python 06_trend_correction.py --factor 0.995   # 年0.5%減る想定
+    uv run python 06_trend_correction.py --factor 0.988   # 対象者が年1.2%減る想定
+    uv run python 06_trend_correction.py --factor 0.995   # 年0.5%減る想定
 
   乗率は個人別予測値と信頼区間の両方に一律で掛かる。
   根拠値は実データなら「前年にいたIDのうち翌年消えた割合 −  新規に現れたIDの割合」
@@ -52,6 +53,12 @@ import argparse
 import os
 import numpy as np
 import pandas as pd
+
+# data/ 等の相対パスはカレントディレクトリ基準のため、02_src_py/ の中から実行した場合は
+# プロジェクトルートへ戻す（2026-09-17追加）。ルートから実行した場合は何もしない。
+# import は sys.path（スクリプトの置き場所）を見るため、chdir しても config / tax_reform は読める。
+if os.path.basename(os.getcwd()) == "02_src_py":
+    os.chdir("..")
 
 from tax_reform import load_reforms, print_reform_summary
 from config import (

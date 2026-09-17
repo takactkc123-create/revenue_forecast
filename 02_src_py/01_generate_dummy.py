@@ -7,8 +7,9 @@
 実データがある場合は 00_CsvCreate_SQL の手順でcsvを作成し、03_feature_eng.py から開始する。
 
 【実行方法】
-  python 01_generate_dummy.py
-  python 01_generate_dummy.py --n 50000    # 1年あたり5万件に変更したい場合
+  ※ 02_src_py/ の中で実行する例。プロジェクトルートからは uv run python 02_src_py/01_generate_dummy.py でも実行できる。
+  uv run python 01_generate_dummy.py
+  uv run python 01_generate_dummy.py --n 50000    # 1年あたり5万件に変更したい場合
   
 【import】
   config.py（人口統計・所得分布・控除上限等のパラメータ）
@@ -21,6 +22,12 @@ import argparse
 import os
 import numpy as np
 import pandas as pd
+
+# data/ 等の相対パスはカレントディレクトリ基準のため、02_src_py/ の中から実行した場合は
+# プロジェクトルートへ戻す（2026-09-17追加）。ルートから実行した場合は何もしない。
+# import は sys.path（スクリプトの置き場所）を見るため、chdir しても config / tax_reform は読める。
+if os.path.basename(os.getcwd()) == "02_src_py":
+    os.chdir("..")
 
 from tax_reform import (
     compute_salary_income,

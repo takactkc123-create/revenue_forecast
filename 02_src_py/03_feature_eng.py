@@ -4,8 +4,9 @@
 個人住民税予測モデル - Step3: 特徴量エンジニアリング
 
 【実行方法】
-  python 03_feature_eng.py
-  python 03_feature_eng.py --file data/01out_individual_raw.csv
+  ※ 02_src_py/ の中で実行する例。プロジェクトルートからは uv run python 02_src_py/03_feature_eng.py でも実行できる。
+  uv run python 03_feature_eng.py
+  uv run python 03_feature_eng.py --file data/01out_individual_raw.csv
 
 【import】
 data/01out_individual_raw.csv（実データ or ダミーデータ）
@@ -34,6 +35,12 @@ import argparse
 import os
 import numpy as np
 import pandas as pd
+
+# data/ 等の相対パスはカレントディレクトリ基準のため、02_src_py/ の中から実行した場合は
+# プロジェクトルートへ戻す（2026-09-17追加）。ルートから実行した場合は何もしない。
+# import は sys.path（スクリプトの置き場所）を見るため、chdir しても config / tax_reform は読める。
+if os.path.basename(os.getcwd()) == "02_src_py":
+    os.chdir("..")
 
 from tax_reform import (
     compute_basic_deduction,

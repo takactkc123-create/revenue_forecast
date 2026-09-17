@@ -7,14 +7,15 @@ LightGBM で個人別住民税額を学習し、時系列ホールドアウト�
 tax_reform_config.csv の label_correction を適用してから学習する。
 
 【実行方法】
-  python 04_model_train.py                   # config の VALIDATION_MODE に従う
-  python 04_model_train.py --standard        # 標準モード（TRAIN_YEARS → TEST_YEAR）
+  ※ 02_src_py/ の中で実行する例。プロジェクトルートからは uv run python 02_src_py/04_model_train.py でも実行できる。
+  uv run python 04_model_train.py                   # config の VALIDATION_MODE に従う
+  uv run python 04_model_train.py --standard        # 標準モード（TRAIN_YEARS → TEST_YEAR）
         -> TRAIN_YEARS で学習 → TEST_YEAR で 1 回評価。保存モデル = TRAIN_YEARS 学習済み。
-  python 04_model_train.py --walkforward     # ウォークフォワード検証 + 標準最終モデル
+  uv run python 04_model_train.py --walkforward     # ウォークフォワード検証 + 標準最終モデル
         -> フォールド別精度確認後、同じ最終モデル（TRAIN_YEARS）を保存
-  python 04_model_train.py --retrain-all     # ウォークフォワード検証 + 全年度再学習
+  uv run python 04_model_train.py --retrain-all     # ウォークフォワード検証 + 全年度再学習
         -> フォールド別精度確認 → fold4 を 04out_val_result.csv に保存（TRAIN_YEARS + TEST_YEAR 全年度で再学習して保存)
-  python 04_model_train.py --walkforward --min-train 3  # 最小訓練年数を変更
+  uv run python 04_model_train.py --walkforward --min-train 3  # 最小訓練年数を変更
 
 【import】
   data/03out_individual_prepared.csv  ← 03_feature_eng.py の出力
@@ -41,6 +42,12 @@ import numpy as np
 import pandas as pd
 import lightgbm as lgb
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+
+# data/ 等の相対パスはカレントディレクトリ基準のため、02_src_py/ の中から実行した場合は
+# プロジェクトルートへ戻す（2026-09-17追加）。ルートから実行した場合は何もしない。
+# import は sys.path（スクリプトの置き場所）を見るため、chdir しても config / tax_reform は読める。
+if os.path.basename(os.getcwd()) == "02_src_py":
+    os.chdir("..")
 
 from tax_reform import load_reforms, apply_reforms, print_reform_summary, compute_non_taxable_flag
 from config import (

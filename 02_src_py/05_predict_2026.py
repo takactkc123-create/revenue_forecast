@@ -8,11 +8,12 @@
 tax_reform_config.csv の feature_correction を適用して税制改正を特徴量に反映する。
 
 【実行方法】
-  python 05_predict_2026.py
-  python 05_predict_2026.py --year 2027
-  python 05_predict_2026.py --file data/individual_2026_input.csv  # 実データがある場合
-  python 05_predict_2026.py --wage-rate 0.025   # 給与上昇率を直接指定
-  python 05_predict_2026.py --wage-delta 0.013  # 実績トレンド + 1.3%
+  ※ 02_src_py/ の中で実行する例。プロジェクトルートからは uv run python 02_src_py/05_predict_2026.py でも実行できる。
+  uv run python 05_predict_2026.py
+  uv run python 05_predict_2026.py --year 2027
+  uv run python 05_predict_2026.py --file data/individual_2026_input.csv  # 実データがある場合
+  uv run python 05_predict_2026.py --wage-rate 0.025   # 給与上昇率を直接指定
+  uv run python 05_predict_2026.py --wage-delta 0.013  # 実績トレンド + 1.3%
 
 【import】
   data/03out_individual_prepared.csv  ← 03 の出力
@@ -34,6 +35,12 @@ import os
 import numpy as np
 import pandas as pd
 import lightgbm as lgb
+
+# data/ 等の相対パスはカレントディレクトリ基準のため、02_src_py/ の中から実行した場合は
+# プロジェクトルートへ戻す（2026-09-17追加）。ルートから実行した場合は何もしない。
+# import は sys.path（スクリプトの置き場所）を見るため、chdir しても config / tax_reform は読める。
+if os.path.basename(os.getcwd()) == "02_src_py":
+    os.chdir("..")
 
 from tax_reform import (
     load_reforms, apply_reforms, print_reform_summary,
