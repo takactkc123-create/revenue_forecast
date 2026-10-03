@@ -122,8 +122,8 @@ Windows PowerShellでも同じコマンドがそのまま使用可能
 ├── 03_notebooks/   02_src_py と同じ処理のNotebook版（公開・閲覧用）
 ├── 04_datacheck/   データ確認用のグラフ（02_datacheck の出力。fig0〜fig8）
 ├── 05_results/     最終レポート用のグラフ（07_visualize の出力。fig1〜fig7）
-├── data/           入力・中間・予測結果のCSV【非公開】
-├── models/         学習済みモデル【非公開】と、その設定の記録 model_config.json【公開】
+├── data/           【非公開】入力・中間・予測結果のCSV
+├── models/         【非公開】学習済みモデル lgbm_model.txt ／【公開】設定の記録 model_config.json
 └── pyproject.toml / uv.lock / .python-version   Python環境の定義（uv sync で再現）
 ```
 
@@ -190,7 +190,7 @@ Windows PowerShellでも同じコマンドがそのまま使用可能
 │
 ├── 05_results/                   # 07_visualize.py の出力（最終レポート図。fig1〜fig7）
 │
-├── data/                         # 非公開（.gitignore対象）。実データ運用時もこのフォルダを使う
+├── data/                         # 【非公開】入力・中間・予測結果のCSV（フォルダごと .gitignore 対象）。実データ運用時もこのフォルダを使う
 │   ├── 01out_individual_raw.csv        # 入力データ（実データ or ダミー）← 01 の出力
 │   ├── 03out_individual_prepared.csv   # 特徴量追加済みデータ ← 03 の出力
 │   ├── tax_reform_config.csv           # 税制改正補正ルール（手動管理・to_csv対象外）
@@ -200,10 +200,12 @@ Windows PowerShellでも同じコマンドがそのまま使用可能
 │   ├── 05out_prediction_2026.csv       # 個人別予測値 ← 05 の出力
 │   └── 06out_prediction_adjusted_2026.csv  # 補正後予測値 ← 06 の出力
 │
-└── models/                       # lgbm_model.txt は非公開、model_config.json のみ公開
-    ├── lgbm_model.txt            # 学習済みモデル【非公開】
+└── models/                       # フォルダ内は .gitignore 対象だが、model_config.json だけ除外設定で公開
+    ├── lgbm_model.txt            # 【非公開】学習済みモデル
     └── model_config.json         # 【公開】04が出力する設定の記録（使った特徴量・学習年・パラメータ・検証モード）
 ```
+
+**【非公開】** は `.gitignore` 対象でGitHubに公開されない。フォルダに付いている場合は中身すべてが対象。上記のほか `__pycache__/`・`*.pyc`・`.venv/` も対象だが、ツリーには記載していない。
 
 > `data/`と`models/lgbm_model.txt`は`.gitignore`対象（非公開）。`models/model_config.json`だけは、このREADMEの結果がどの特徴量・学習年・検証モードで出たかを`config.py`を開かなくても確認できるよう公開している。`lgbm_model.txt`は実データ版も同じパスに書き込み、実データ由来の情報を含み得るため公開しない。GitHub上のフォルダ表示順（`01_src_sql`〜`05_results`）は、アルファベット順にしか並ばないGitHubの仕様に合わせて連番を振ったものであり、パイプラインの処理順（SQL抽出→スクリプト→Notebook→EDA→最終成果物）と一致させている。
 
