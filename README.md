@@ -35,7 +35,7 @@
 | 処理の流れ | 基幹系から抽出した個人別の収入・控除データ（`01_src_sql/00_CsvCreate.sql`）を起点に、特徴量エンジニアリング→学習→翌年予測→マクロ補正→可視化。最終出力は「自治体全体の翌年度税収見込み額（信頼区間つき）」 |
 | ダミー版の役割 | 実データがない段階でもパイプライン全体と精度検証手法を確認できるPoC用途。全国統計に基づく疑似データで代替 |
 | 実データ版の役割 | 基幹系データを投入する本番想定。列名・控除計算式を実データに置き換える。控除をフラグでしか持たない場合は金額化の加工を追加（`03_feature_eng.py`） |
-| 前提と限界 | 過去の実績パターンの学習に基づく。税制改正・急激な経済変動・自治体固有の制度（等級地ごとの非課税基準等）は`data/tax_reform_config.csv`等の手動補正でカバーする。補正を未設定の場合は精度が異なる |
+| 前提と限界 | 過去の実績パターンの学習に基づく。税制改正・急激な経済変動・自治体固有の制度（等級地ごとの非課税基準等）は`02_src_py/tax_reform_config.json`等の手動補正でカバーする。補正を未設定の場合は精度が異なる |
 
 ---
 
@@ -143,6 +143,7 @@ Windows PowerShellでも同じコマンドがそのまま使用可能
 ├── 02_src_py/                    # 実行スクリプト本体（CLI版。ルート／02_src_py どちらからでも実行可）
 │   ├── config.py                 # 【原本】全設定値の一元管理（ここだけ触ればパラメータ調整可能）
 │   ├── tax_reform.py             # 【原本】税制改正補正ロジック（共通モジュール）
+│   ├── tax_reform_config.json     # 税制改正の補正ルール（手動管理。04〜06が読み込む）
 │   │
 │   ├── 01_generate_dummy.py      # ダミーデータ生成
 │   │     in  : config.pyの設定値
@@ -193,7 +194,6 @@ Windows PowerShellでも同じコマンドがそのまま使用可能
 ├── data/                         # 【非公開】入力・中間・予測結果のCSV（フォルダごと .gitignore 対象）。実データ運用時もこのフォルダを使う
 │   ├── 01out_individual_raw.csv        # 入力データ（実データ or ダミー）← 01 の出力
 │   ├── 03out_individual_prepared.csv   # 特徴量追加済みデータ ← 03 の出力
-│   ├── tax_reform_config.csv           # 税制改正補正ルール（手動管理・to_csv対象外）
 │   ├── 04out_yearly_result.csv         # 年度別合算精度 ← 04 の出力
 │   ├── 04out_val_result.csv            # 個人別検証結果 ← 04 の出力
 │   ├── 04out_walkforward_result.csv    # walk-forward各フォールドの精度（--walkforward/--retrain-all時のみ）← 04 の出力
@@ -209,7 +209,7 @@ Windows PowerShellでも同じコマンドがそのまま使用可能
 
 > `data/`と`models/lgbm_model.txt`は`.gitignore`対象（非公開）。`models/model_config.json`だけは、このREADMEの結果がどの特徴量・学習年・検証モードで出たかを`config.py`を開かなくても確認できるよう公開している。`lgbm_model.txt`は実データ版も同じパスに書き込み、実データ由来の情報を含み得るため公開しない。GitHub上のフォルダ表示順（`01_src_sql`〜`05_results`）は、アルファベット順にしか並ばないGitHubの仕様に合わせて連番を振ったものであり、パイプラインの処理順（SQL抽出→スクリプト→Notebook→EDA→最終成果物）と一致させている。
 
-- 出力ファイル名の先頭2桁は、そのファイルを`to_csv`で書き出したパイプラインのステップ番号を示す（例: `03out_`＝`03_feature_eng.py`の出力）。`tax_reform_config.csv`は唯一の例外で、どのステップも書き出さない手動管理の入力ファイルのためプレフィックスを付けていない。
+- 出力ファイル名の先頭2桁は、そのファイルを`to_csv`で書き出したパイプラインのステップ番号を示す（例: `03out_`＝`03_feature_eng.py`の出力）。
 - 実データCSVに必要な列は `02_src_py/03_feature_eng.py` 冒頭のドキュメントを参照。SQLでの抽出方法は `01_src_sql/00_CsvCreate.sql` を参照。
 
 ---
@@ -464,7 +464,7 @@ Windows PowerShellでも同じコマンドがそのまま使用可能
 
 **留意点**
 
-- 税制改正がある年のラベルは `tax_reform_config.csv` の `label_correction` で補正してから学習する（改正の影響を過去年に誤帰属させない）。
+- 税制改正がある年のラベルは `tax_reform_config.json` の `label_correction` で補正してから学習する（改正の影響を過去年に誤帰属させない）。
 - 非課税基準（地方税法第295条）以下の予測値は強制的に0円に上書きされる。
 - `year` は特徴量（FEATURE_COLS）に含まれない。木モデルは訓練範囲外の年値を外挿できないためであり、年ごとの経済動向はダミーデータの上昇率設定や実データの特徴量分布として取り込む設計になっている。
 - 学習結果の設定（特徴量列・ハイパーパラメータ・検証モード等）は`models/model_config.json`にJSON形式で保存され、`05_predict_2026.py`・`07_visualize.py`が読み込む。
@@ -501,22 +501,37 @@ uv run python 02_src_py/05_predict_2026.py --wage-rate 0.025     # 給与上昇�
 | トレンド補正 | 年度別合算の系統的な過大・過小傾向を乗率で補正 |
 | 税制改正マクロ補正 | 扶養控除要件引き上げ・特定親族特別控除等の影響を推計して加減算 |
 
-補正ルールは `data/tax_reform_config.csv` で管理されており、新たな税制改正が生じた場合はCSVに行を追加するだけで対応可能（コード修正不要）。
+補正ルールは `02_src_py/tax_reform_config.json` で管理されており、新たな税制改正が生じた場合はCSVに行を追加するだけで対応可能（コード修正不要）。
 特に補正の必要がない場合（05にて既に設定済の場合を含む）は`06`実行しても`05`と同じ集計結果が出力される。
 
-**設定例：給与所得控除の最低額引き上げ（55万円→65万円・2026年〜）**
+**設定ファイルの書き方（`02_src_py/tax_reform_config.json`）**
 
-| 列 | 値 | 意味 |
-|---|---|---|
-| `reform_name` | `salary_deduction_floor` | 補正の識別子。`tax_reform.py`の補正関数と対応する |
-| `effective_year` | 2026 | 施行年度。予測年がこの年以降なら対象になる |
-| `active` | True | この行を読み込む。**False なら行ごと無視され、補正は一切行われない** |
-| `one_time` | False | 施行年以降も継続（True は施行年のみ） |
-| `reform_type` | `feature_correction` | 個人の特徴量を補正するため、適用するのは`05`。`06`が使うのは`macro_correction` |
-| `param_key` / `param_value` | `old_floor` 550000 ／ `new_floor` 650000 | 改正前後の給与所得控除の最低額 |
+1つの改正を1ブロックで書く。例は定額減税（現在は無効）。
 
-- **active=True（現在の設定）**：給与収入から旧55万・新65万それぞれで給与所得控除を計算し、増えた分（最大10万円）を給与所得から差し引く。あわせて総所得金額等・課税標準額を減らし、差引所得控除合計と比率特徴量を計算し直す。対象は控除額が実際に増える給与収入およそ190万円以下の人で、それより上はブラケット計算値が既に65万円を超えるため変化しない。実行時に対象人数・給与収入の中央値・最大控除増・税額減少の概算が表示される。
-- **active=False**：その行は読み込まれず補正関数も呼ばれないため、予測は改正前の水準のまま。扶養要件引き上げ（`dependent_income_limit`）と特定親族特別控除（`special_dependent_allowance`）は家族構成・扶養親族の年齢データがないため False にしてあり、`06`の集計レベル補正で扱う想定になっている（現状は2件とも False のため`06`は「適用する補正なし」となる）。
+```json
+{
+  "name": "teigaku_reduction",
+  "effective_year": 2024,
+  "one_time": true,
+  "active": false,
+  "reform_type": "label_correction",
+  "params": { "amount_per_person": 10000 },
+  "memo": "実データ投入時に定額減税前税額へ加工済みとするため無効"
+}
+```
+
+| 項目 | 意味 |
+|---|---|
+| `name` | 補正の識別子。`tax_reform.py`の`REFORM_REGISTRY`のキーと対応する |
+| `effective_year` | 施行年度。予測年がこの年以降なら対象になる |
+| `active` | `true`で読み込む。**`false`なら無視され、補正は一切行われない** |
+| `one_time` | `true`は施行年のみ、`false`は施行年以降も継続 |
+| `reform_type` | 補正する段階。`label_correction`＝04で学習ラベル、`feature_correction`＝05で特徴量、`macro_correction`＝06で集計値 |
+| `params` | 補正関数に渡す値 |
+| `memo` | 備考（プログラムは読まない） |
+
+- 現在の設定は3件とも`active: false`のため、04〜06はいずれも「適用する補正なし」となる。
+- 給与所得控除の最低額引き上げ（2026年〜 55万→65万）は、この設定ファイルではなく`tax_reform.py`の`compute_salary_deduction()`が年度で判定して適用する（設定ファイルにも書くと二重適用になるため）。
 
 
 
@@ -652,8 +667,8 @@ FEATURE_COLS = RAW_FEATURE_COLS + GENERATED_FEATURE_COLS
 
 ### 税制改正に対応したいとき
 
-1. `data/tax_reform_config.csv` に行を追加（`reform_name`, `effective_year`, `param_key`, `param_value` 等）
-2. 新しい計算式が必要な場合のみ `tax_reform.py` に関数を追加
+1. `02_src_py/tax_reform_config.json` の `reforms` に1ブロック追加（`name`, `effective_year`, `reform_type`, `params` 等）
+2. 新しい計算式が必要な場合のみ `tax_reform.py` に関数を追加し、`REFORM_REGISTRY` に登録する
 
 ---
 

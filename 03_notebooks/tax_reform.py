@@ -3,7 +3,7 @@ tax_reform.py
 =============
 税制改正補正モジュール（04_model_train / 05_predict_2026 / 06_trend_correction から呼び出される共通モジュール）
 
-tax_reform_config.csv から補正ルールを読み込み、
+tax_reform_config.json から補正ルールを読み込み、
 学習ラベル補正（label_correction）および予測特徴量補正（feature_correction）を適用する。
 
 【使い方】
@@ -17,22 +17,23 @@ tax_reform_config.csv から補正ルールを読み込み、
   reforms = load_reforms(path, target_year=2026, reform_type="feature_correction")
   df_reformed  = apply_reforms(df.copy(), reforms)
 
-【CSV列の説明】
-  reform_name    : 補正の識別子。REFORM_REGISTRY のキーと対応
+【JSONの項目（tax_reform_config.json の reforms の1ブロック＝1つの改正）】
+  name           : 補正の識別子。REFORM_REGISTRY のキーと対応
   effective_year : 施行年度
-  one_time       : True=その年のみ / False=以降継続（補正関数内で制御）
-  active         : False なら読み込みから除外（未実装・データ不足など）
-  reform_type    : label_correction または feature_correction
-  param_key      : パラメータ名
-  param_value    : パラメータ値（int/float を自動判定）
+  one_time       : true=その年のみ / false=以降継続（補正関数内で制御）
+  active         : false なら読み込みから除外（未実装・データ不足など）
+  reform_type    : label_correction / feature_correction / macro_correction
+  params         : 補正関数に渡すパラメータ（例: {"amount_per_person": 10000}）
   memo           : 人間向け備考（コード上は不使用）
 
 【補正追加の手順】
-  1. tax_reform_config.csv に行を追加（reform_name, params）
+  1. tax_reform_config.json の reforms に1ブロック追加（name, params 等）
   2. 計算式が新規なら _apply_<name> 関数を実装
   3. REFORM_REGISTRY にエントリを追加
 """
 
+import json
+import os
 import numpy as np
 import pandas as pd
 from config import (
@@ -42,7 +43,7 @@ from config import (
 )
 
 TARGET_COL         = "年税額"
-REFORM_CONFIG_PATH = "data/tax_reform_config.csv"
+REFORM_CONFIG_PATH = "02_src_py/tax_reform_config.json"
 
 
 # ─────────────────────────────────────────────
@@ -277,51 +278,38 @@ def compute_basic_deduction(income_total: np.ndarray) -> np.ndarray:
 
 
 # ─────────────────────────────────────────────
-# CSV 読み込み・ユーティリティ
+# 設定ファイル（JSON）の読み込み
 # ─────────────────────────────────────────────
-def _parse_value(v: str):
-    """文字列を int → float → str の順で変換する。"""
-    try:
-        return int(v)
-    except (ValueError, TypeError):
-        pass
-    try:
-        return float(v)
-    except (ValueError, TypeError):
-        pass
-    return str(v)
-
-
 def load_reforms(config_path: str, target_year: int, reform_type: str = None) -> list:
     """
-    対象年度（target_year）以前に施行された補正ルールを CSV から読み込む。
+    対象年度（target_year）以前に施行された補正ルールを JSON から読み込む。
 
-    effective_year <= target_year かつ active=True の行が対象。
-    補正関数が year 列で年次フィルタを行うため、
+    effective_year <= target_year かつ active=true の改正が対象。
+    補正関数が年度列で年次フィルタを行うため、
     一括読み込みした後に apply_reforms に渡せばよい。
 
+    設定ファイルが無い場合は警告を表示して空リストを返す（＝補正なしとして処理を続ける）。
+
     Returns:
-        [{"name": str, "params": dict}, ...]  適用順リスト
+        [{"name": str, "params": dict}, ...]  name・施行年度の順に並べた適用順リスト
     """
-    df = pd.read_csv(config_path, encoding="utf-8-sig", dtype=str)
-    df["active"]         = df["active"].str.strip().str.lower() == "true"
-    df["effective_year"] = df["effective_year"].astype(int)
-
-    df = df[df["active"] & (df["effective_year"] <= target_year)]
-
-    if reform_type:
-        df = df[df["reform_type"].str.strip() == reform_type]
-
-    if df.empty:
+    if not os.path.exists(config_path):
+        print(f"  ⚠ 税制改正の設定ファイルがありません（{config_path}）→ 補正なしで続行")
         return []
 
+    with open(config_path, encoding="utf-8") as f:
+        cfg = json.load(f)
+
     reforms = []
-    for (name, eff_year), group in df.groupby(["reform_name", "effective_year"], sort=True):
-        params = {row["param_key"]: _parse_value(row["param_value"])
-                  for _, row in group.iterrows()}
-        params["_effective_year"] = int(eff_year)
-        params["_one_time"]       = group["one_time"].iloc[0].strip().lower() == "true"
-        reforms.append({"name": name, "params": params})
+    for r in sorted(cfg["reforms"], key=lambda r: (r["name"], r["effective_year"])):
+        if not r["active"] or r["effective_year"] > target_year:
+            continue
+        if reform_type and r["reform_type"] != reform_type:
+            continue
+        params = dict(r["params"])
+        params["_effective_year"] = int(r["effective_year"])
+        params["_one_time"]       = bool(r["one_time"])
+        reforms.append({"name": r["name"], "params": params})
 
     return reforms
 
@@ -368,7 +356,7 @@ def _apply_teigaku_reduction(df: pd.DataFrame, params: dict) -> pd.DataFrame:
     扶養分（1人1万円）は個人データから正確に算出困難なため本人分のみ補正。
 
     【現在の運用方針】
-    tax_reform_config.csv で active=False に設定済み（この関数は呼ばれない）。
+    tax_reform_config.json で active=false に設定済み（この関数は呼ばれない）。
     実データ投入時に 2024年の税額を「定額減税前の水準 (+1万円)」に加工することで
     モデルパイプライン外で対応する方針に変更。
     ダミーデータには定額減税効果が未実装のため、active=True にすると 2024年ラベルが
@@ -480,7 +468,7 @@ def _apply_dependent_income_limit(df: pd.DataFrame, params: dict) -> pd.DataFram
     個人データに家族関係情報がないため個人レベル補正は不可。
     06_trend_correction.py の dependent_income_limit で集計レベル補正を実施。
     """
-    print(f"    扶養要件引き上げ ({params['_effective_year']}年〜): スキップ → 43 で集計補正")
+    print(f"    扶養要件引き上げ ({params['_effective_year']}年〜): スキップ → 06 で集計補正")
     return df
 
 
@@ -493,7 +481,7 @@ def _apply_special_dependent_allowance(df: pd.DataFrame, params: dict) -> pd.Dat
     """
     age_from = int(params.get("age_from", 19))
     age_to   = int(params.get("age_to",   22))
-    print(f"    特定親族特別控除 ({age_from}-{age_to}歳, {params['_effective_year']}年〜): スキップ → 43 で集計補正")
+    print(f"    特定親族特別控除 ({age_from}-{age_to}歳, {params['_effective_year']}年〜): スキップ → 06 で集計補正")
     return df
 
 
@@ -501,7 +489,7 @@ def _apply_special_dependent_allowance(df: pd.DataFrame, params: dict) -> pd.Dat
 # 補正レジストリ（名前 → 関数）
 # ─────────────────────────────────────────────
 REFORM_REGISTRY: dict = {
-    "定額減税額"          : _apply_teigaku_reduction,
+    "teigaku_reduction"          : _apply_teigaku_reduction,
     "salary_deduction_floor"     : _apply_salary_deduction_floor,
     "dependent_income_limit"     : _apply_dependent_income_limit,
     "special_dependent_allowance": _apply_special_dependent_allowance,

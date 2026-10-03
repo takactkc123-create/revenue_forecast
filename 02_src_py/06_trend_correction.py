@@ -7,7 +7,7 @@
      - 年度別合算予測の系統的な過大・過小傾向を緩和する乗率補正
      - 04 の 04out_yearly_result.csv に基づいて自動算出（オプションで上書き可）
 
-  B. 税制改正マクロ補正（tax_reform_config.csv の macro_correction）
+  B. 税制改正マクロ補正（tax_reform_config.json の macro_correction）
      - 扶養要件引き上げ（2026年〜）: 扶養控除新規取得者の増加分を推計して加算
      - 特定親族特別控除（2026年〜）: 19-22歳扶養親族への追加控除を推計して減算
 
@@ -44,7 +44,7 @@
   ※ 引数なしで実行したときの自動算出（compute_trend_factor）は、04 の訓練年の
     予測誤差＝モデルの系統的なズレを打ち消すものであり、人口動態は一切見ていない。
     訓練年の誤差が小さいと乗率は 1.0 になり「補正なし」となる点に注意。
-  ※ tax_reform_config.csv の macro_correction に人口減少の行を追加しても効かない
+  ※ tax_reform_config.json の macro_correction に人口減少の行を追加しても効かない
     （apply_macro_reforms が扱うのは dependent_income_limit /
      special_dependent_allowance の2つのみ。それ以外は「未実装」警告を出して無視する）。
 """
@@ -92,7 +92,7 @@ def compute_trend_factor(yearly_df: pd.DataFrame) -> float:
 # ─── 税制改正マクロ補正 ───────────────────────────────────────────────────────
     """
     個人レベルで反映できない税制改正を集計レベルで補正する。
-    tax_reform_config.csv の macro_correction タイプを読み込んで適用する。
+    tax_reform_config.json の macro_correction タイプを読み込んで適用する。
 
     Returns:
         (補正後合計_億円, 補正明細リスト)
@@ -112,18 +112,14 @@ def apply_macro_reforms(
     adjustments = []
     total = pred_total_oku
 
-    # 【呼び出す場合】data/tax_reform_config.csv で以下の対応が必要（このファイルの修正は不要）。
-    # 現状 dependent_income_limit / special_dependent_allowance は reform_type=feature_correction の行として active=False で登録されており
-    # （05 の個人特徴量補正用、現在は年齢等のデータ不足によりスキップのみ）、そのままでは下記 if/elif には一致しない。
-    # 
-    #   1. reform_type を feature_correction → macro_correction に変更
-    #   2. active を True に変更
-    #   3. param_key/param_value を下記 if/elif が参照するキーに合わせる
-    #      （既存の old_limit/new_limit 行はそのままでは使われないので、新しい行として追加するかparam_key ごと置き換える）
-    #      
+    # 【有効にする場合】02_src_py/tax_reform_config.json で以下を設定する（このファイルの修正は不要）。
+    # dependent_income_limit / special_dependent_allowance は reform_type=macro_correction・active=false で登録済み。
+    #
+    #   1. active を true に変更
+    #   2. 必要に応じて params に下記 if/elif が参照するキーを追加する（未設定なら既定値で計算される）
     #        dependent_income_limit     : new_dependent_rate（既定0.002）, deduction_per_person（既定330000）
-    #        special_dependent_allowance: target_rate（既定0.003）, deduction_per_person（既定450000）,
-    #                                      age_from（既定19）, age_to（既定22）※age_from/age_toは既存行を流用可
+    #        special_dependent_allowance: target_rate（既定0.003）, deduction_per_person（既定450000）
+    #      ※ 既存の old_limit/new_limit・age_from/age_to は改正内容の記録で、計算には使われない
     for r in reforms:
         name   = r["name"]
         params = r["params"]

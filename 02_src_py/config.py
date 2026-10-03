@@ -24,7 +24,7 @@ SUMMARY_PATH       = "data/03out_individual_summary.csv"
 MODEL_DIR          = "models"
 MODEL_PATH         = "models/lgbm_model.txt"
 MODEL_CONFIG_PATH  = "models/model_config.json"
-REFORM_CONFIG_PATH = "data/tax_reform_config.csv"
+REFORM_CONFIG_PATH = "02_src_py/tax_reform_config.json"
 
 # ─── 税額下限（住民税均等割：道府県民税1,800円 + 市町村民税3,500円 = 5,300円）──
 # 2024年度以降は森林環境税1,000円追加だが、住民税が1,000円減額し、結果的に5,300円を維持

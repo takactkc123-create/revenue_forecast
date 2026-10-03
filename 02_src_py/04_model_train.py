@@ -4,7 +4,7 @@
 個人住民税予測モデル - Step4: モデル学習・時系列検証
 
 LightGBM で個人別住民税額を学習し、時系列ホールドアウト（TEST_YEAR）で精度を検証する。
-tax_reform_config.csv の label_correction を適用してから学習する。
+tax_reform_config.json の label_correction を適用してから学習する。
 
 【実行方法】
   ※ 02_src_py/ の中で実行する例。プロジェクトルートからは uv run python 02_src_py/04_model_train.py でも実行できる。
@@ -20,7 +20,7 @@ tax_reform_config.csv の label_correction を適用してから学習する。
 【import】
   data/03out_individual_prepared.csv  ← 03_feature_eng.py の出力
   config.py                           ← モデル設定（特徴量・パラメータ・学習年・テスト年）
-  tax_reform_config.csv               ← 税制改正設定ファイル
+  tax_reform_config.json               ← 税制改正設定ファイル
 
 【export】
   models/lgbm_model.txt              ← LightGBM モデルファイル
@@ -249,7 +249,7 @@ def main():
     df[feat_cols] = df[feat_cols].fillna(0)
 
     # ── 税制改正補正（学習ラベル） ───────────────────────────────────────────
-    ## config.py から REFORM_CONFIG_PATH = "data/tax_reform_config.csv"
+    ## config.py から REFORM_CONFIG_PATH = "02_src_py/tax_reform_config.json"
     print("── 税制改正補正（label_correction） ──")
     
     reforms = load_reforms(

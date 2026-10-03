@@ -1,0 +1,45 @@
+{
+  "_説明": [
+    "税制改正の補正ルール。04〜06 が tax_reform.load_reforms() で読み込む。",
+    "active=false の改正は読み込まれない。effective_year 以降の年度が対象。",
+    "reform_type: label_correction=04で学習ラベルを補正 / feature_correction=05で特徴量を補正 / macro_correction=06で集計値を補正",
+    "name は tax_reform.py の REFORM_REGISTRY のキーと対応させること。"
+  ],
+  "reforms": [
+    {
+      "name": "teigaku_reduction",
+      "effective_year": 2024,
+      "one_time": true,
+      "active": false,
+      "reform_type": "label_correction",
+      "params": {
+        "amount_per_person": 10000
+      },
+      "memo": "実データ投入時に定額減税前税額へ加工済みとするため active=False（モデル内補正は不要）"
+    },
+    {
+      "name": "dependent_income_limit",
+      "effective_year": 2026,
+      "one_time": false,
+      "active": false,
+      "reform_type": "macro_correction",
+      "params": {
+        "old_limit": 480000,
+        "new_limit": 580000
+      },
+      "memo": "扶養要件引き上げ（扶養可能所得 48万→58万）。家族関係データが不足するため無効。有効にすると06で集計補正する"
+    },
+    {
+      "name": "special_dependent_allowance",
+      "effective_year": 2026,
+      "one_time": false,
+      "active": false,
+      "reform_type": "macro_correction",
+      "params": {
+        "age_from": 19,
+        "age_to": 22
+      },
+      "memo": "特定親族特別控除（19〜22歳の扶養親族）。扶養親族の年齢データが不足するため無効。有効にすると06で集計補正する"
+    }
+  ]
+}

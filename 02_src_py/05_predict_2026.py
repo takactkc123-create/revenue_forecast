@@ -5,7 +5,7 @@
 
 04_model_train.py で保存したモデルを使い、翌年の個人別住民税額を予測する。
 実データがない場合は直近年をベースに給与・所得トレンドを外挿して推計する。
-tax_reform_config.csv の feature_correction を適用して税制改正を特徴量に反映する。
+tax_reform_config.json の feature_correction を適用して税制改正を特徴量に反映する。
 
 【実行方法】
   ※ 02_src_py/ の中で実行する例。プロジェクトルートからは uv run python 02_src_py/05_predict_2026.py でも実行できる。
@@ -20,7 +20,7 @@ tax_reform_config.csv の feature_correction を適用して税制改正を特�
   models/lgbm_model.txt               ← 04 の出力
   models/model_config.json            ← 04 の出力
   config.py                           ← モデル設定（特徴量・パラメータ・学習年・テスト年）
-  tax_reform_config.csv               ← 税制改正設定ファイル
+  tax_reform_config.json               ← 税制改正設定ファイル
 
 【export】
   data/05out_prediction_YYYY.csv          ← 個人別予測値（信頼区間付き）
@@ -261,7 +261,7 @@ def main():
         print(f"エラー: {MODEL_CONFIG_PATH} がありません。先に 04_model_train.py を実行してください。")
         return
 
-    # def の path を呼出 : cpnfig.py で設定 - MODEL_CONFIG_PATH  = "models/model_config.csv"
+    # config.py で設定した MODEL_CONFIG_PATH（models/model_config.json）を読み込む
     config       = load_model_config(MODEL_CONFIG_PATH)
     feature_cols = config["feature_cols"]
     min_tax      = config["min_tax"]
@@ -323,14 +323,9 @@ def main():
         feature_reforms = load_reforms(
             REFORM_CONFIG_PATH, target_year=args.year, reform_type="feature_correction"
         )
-        # 給与収入 がある場合は estimate_next_year が既に正確な計算式を
-        # 適用済みのため salary_deduction_floor の二重適用を防ぐ
-        has_gross = "給与収入" in pred_df.columns
-        if has_gross:
-            skipped = [r for r in feature_reforms if r["name"] == "salary_deduction_floor"]
-            feature_reforms = [r for r in feature_reforms if r["name"] != "salary_deduction_floor"]
-            if skipped:
-                print("  salary_deduction_floor: スキップ（estimate_next_year で適用済）")
+        # 給与所得控除の引き上げ（2026年〜 55万→65万）は、estimate_next_year() が
+        # compute_salary_income(..., year=target_year) で年度判定して適用済み。
+        # tax_reform_config 側には持たせない（二重適用になるため）。
         print_reform_summary(feature_reforms)
         pred_df_out = apply_reforms(pred_df.copy(), feature_reforms)
 
