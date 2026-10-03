@@ -268,6 +268,7 @@ def plot_salary_income_yearly(df, gross_col="給与収入", net_col="給与所�
             data=df_long,
             x="年度", y="金額", hue="種別",
             estimator=estimator,
+            seed=42,          # 誤差バー（95%信頼区間）はブートストラップで算出するため、固定しないと実行ごとに図が変わる
             ax=ax,
         )
         ax.set_title(f"給与収入・給与所得の年度推移（{label_agg}）")
