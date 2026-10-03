@@ -17,6 +17,7 @@ if os.path.basename(os.getcwd()) == "02_src_py":
     os.chdir("..")
 
 from tax_reform import compute_income_tax_rate
+from config import ALL_INCOME_COLS
 
 print("Python version:", sys.version)
 
@@ -439,21 +440,36 @@ def plot_scatter_by_tax_bracket(df, x_col, y_col, show:bool = False):
 # 定額減税の影響可視化
 # 実データでは「定額減税控除額」「年税額（減税額足す前）」をそのまま抽出できる想定。
 # 年税額（現状値）= 年税額（減税額足す前）+ 定額減税控除額 という関係。
-# ダミーデータには当該列がないため、住民税の定額減税ルール
-# （本人1万円＋扶養親族等1人につき1万円、2024年度）で仮の値をモック生成する。
+# ダミーデータには当該列がないため、住民税の定額減税ルールで仮の値をモック生成する。
+#   2024年度: 本人1万円＋扶養親族等1人につき1万円
+#   2025年度: 合計所得1,000万円超〜1,805万円以下で同一生計配偶者がいる人のみ1万円
+#             （2024年度は控除対象配偶者に当たらず対象外だった配偶者分を、2025年度に減税する仕組み）
 
-def mock_teigaku_reduction(df, reduction_years=(2024,2025), amount_per_person=10_000):
+def mock_teigaku_reduction(df, amount_per_person=10_000):
     """
-    year が reduction_years に含まれ、tax_amount > 0 の人に定額減税控除額を仮設定し、
-    以下2列を追加する（実データ投入後はこの関数は不要になる想定）。
-      teigaku_reduction           : 定額減税控除額（仮）
-      tax_amount_before_reduction : tax_amount（減税額足す前）（仮）
+    年税額 > 0 の人に定額減税控除額を仮設定し、以下2列を追加する（実データ投入後はこの関数は不要になる想定）。
+      定額減税額        : 定額減税控除額（仮）
+      定額減税前_年税額  : 年税額（減税額足す前）（仮）
+
+    2024年度: 本人1万円＋扶養親族1人につき1万円
+    2025年度: 合計所得1,000万円超〜1,805万円以下で、同一生計配偶者がいる人のみ1万円
+              （ダミーデータには同一生計配偶者の列が無いため、配偶者控除 > 0 で代用する）
     """
     df = df.copy()
-    target = df["年度"].isin(reduction_years) & (df["年税額"] > 0)
-
+    taxed = df["年税額"] > 0
     reduction = pd.Series(0, index=df.index)
-    reduction.loc[target] = amount_per_person * (1 + df.loc[target, "扶養人数"])
+
+    # 2024年度: 本人＋扶養親族
+    t24 = (df["年度"] == 2024) & taxed
+    reduction.loc[t24] = amount_per_person * (1 + df.loc[t24, "扶養人数"])
+
+    # 2025年度: 合計所得1,000万円超（1,805万円以下）で同一生計配偶者がいる人のみ
+    income_total = df[[c for c in ALL_INCOME_COLS if c in df.columns]].sum(axis=1)
+    t25 = ((df["年度"] == 2025) & taxed
+           & (income_total > 10_000_000) & (income_total <= 18_050_000)
+           & (df["配偶者控除"] > 0))
+    reduction.loc[t25] = amount_per_person
+
     reduction = np.minimum(reduction, df["年税額"])  # 減税額が税額を超えないようクリップ
 
     df["定額減税額"] = reduction
@@ -465,16 +481,16 @@ def plot_teigaku_reduction_by_year(df, before_col="定額減税前_年税額",
                                     reduction_col="定額減税額",
                                     show:bool = False):
     """
-    before_col    : tax_amount（減税額足す前）の列名
+    before_col    : 年税額（減税額足す前）の列名
     reduction_col : 定額減税控除額の列名
-    年度別の税額合計（億円）を、減税額足す前のtax_amountを下・定額減税控除額を上に
-    積み上げて表示する（積み上げた合計が現状のtax_amountに一致する）。
+    年度別の税額合計（億円）を、減税額足す前の年税額を下・定額減税控除額を上に
+    積み上げて表示する（積み上げた合計が現状の年税額に一致する）。
     """
     yearly = df.groupby("年度")[[before_col, reduction_col]].sum() / 1e8
     years = yearly.index.tolist()
 
     fig, ax = plt.subplots(figsize=(8, 5))
-    ax.bar(years, yearly[before_col], label="tax_amount（減税額足す前）", color="#1f77b4")
+    ax.bar(years, yearly[before_col], label="年税額（減税額足す前）", color="#1f77b4")
     ax.bar(years, yearly[reduction_col], bottom=yearly[before_col],
            label="定額減税控除額", color="#e84393")
 
@@ -500,10 +516,10 @@ def plot_teigaku_reduction_by_age_gender(df, before_col="定額減税前_年税�
                                           reduction_col="定額減税額", agg="sum",
                                           show : bool = False):
     """
-    before_col    : tax_amount（減税額足す前）の列名
+    before_col    : 年税額（減税額足す前）の列名
     reduction_col : 定額減税控除額の列名
     agg           : "sum"（合計） or "mean"（平均）
-    年度（6年分）× 年齢区分 × 性別で、減税額足す前のtax_amountを下・定額減税控除額を
+    年度（6年分）× 年齢区分 × 性別で、減税額足す前の年税額を下・定額減税控除額を
     上に積み上げて表示する（性別は色、減税額足す前/控除額はバー内の濃淡で区別）。
     """
     years     = sorted(df["年度"].unique())
@@ -559,11 +575,11 @@ def plot_teigaku_reduction_yearly_by_age(df, before_col="定額減税前_年税�
                                           reduction_col="定額減税額", agg="sum",
                                           show : bool = False):
     """
-    before_col    : tax_amount（減税額足す前）の列名
+    before_col    : 年税額（減税額足す前）の列名
     reduction_col : 定額減税控除額の列名
     agg           : "sum"（合計） or "mean"（平均）
     年齢区分ごとにサブプロットを分け（1行3つ）、各サブプロット内はx軸=年度、
-    減税額足す前のtax_amountを下・定額減税控除額を上に積み上げて表示する
+    減税額足す前の年税額を下・定額減税控除額を上に積み上げて表示する
     （性別は色、減税額足す前/控除額はバー内の濃淡で区別）。
     """
     years     = sorted(df["年度"].unique())
