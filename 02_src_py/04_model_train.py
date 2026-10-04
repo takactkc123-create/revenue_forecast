@@ -49,11 +49,14 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 if os.path.basename(os.getcwd()) == "02_src_py":
     os.chdir("..")
 
-from tax_reform import load_reforms, apply_reforms, print_reform_summary, compute_non_taxable_flag, check_reform_snapshot
+from tax_reform import (
+    load_reforms, apply_reforms, print_reform_summary, check_reform_snapshot,
+    get_min_tax, min_tax_for_rows, non_taxable_flag_from_df,
+)
 from config import (
     PREPARED_DATA_PATH, MODEL_DIR, MODEL_PATH, MODEL_CONFIG_PATH,
     TAX_REFORM_SNAPSHOT_PATH, TRAIN_YEARS, TEST_YEAR,
-    FEATURE_COLS, TARGET_COL, LGBM_PARAMS, MIN_TAX,
+    FEATURE_COLS, TARGET_COL, LGBM_PARAMS,
     VALIDATION_MODE, WF_MIN_TRAIN_YEARS,
 )
 
@@ -113,15 +116,10 @@ def _predict_with_nontaxable(
     raw_df: pd.DataFrame,
     feat_cols: list,
 ) -> np.ndarray:
-    ## モデル予測値を取得し、最小税額はMIN_TAX(5300円)となるよう設定
-    pred = np.maximum(model.predict(feat_df[feat_cols].fillna(0).values), MIN_TAX)
-    _nd  = raw_df["扶養人数"].values if "扶養人数" in raw_df.columns \
-        else (raw_df["扶養控除"].values / 330_000).round().astype(int)
+    ## モデル予測値を取得し、最小税額は各年度の均等割（tax_reform.py の表）となるよう設定
+    pred = np.maximum(model.predict(feat_df[feat_cols].fillna(0).values), min_tax_for_rows(raw_df))
     ## tax_reform.py より関数を読み込み、非課税フラグを計算
-    _fl  = compute_non_taxable_flag(
-        raw_df["総所得金額等"].values, _nd,
-        (raw_df["配偶者控除"].values > 0).astype(int),
-    )
+    _fl  = non_taxable_flag_from_df(raw_df)
     return np.where(_fl, 0, pred)
 
 
@@ -400,7 +398,7 @@ def main():
             "random_state": LGBM_PARAMS["random_state"],
             "n_jobs": LGBM_PARAMS["n_jobs"],
         },
-        "min_tax": MIN_TAX,
+        "min_tax": get_min_tax(TEST_YEAR),   # 記録用（05 は予測年度の値を tax_reform.py の表から引く）
         "tax_reform_snapshot": TAX_REFORM_SNAPSHOT_PATH,
         "validation_mode": mode,
     }

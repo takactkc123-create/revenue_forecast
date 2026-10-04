@@ -4,8 +4,10 @@ tax_reform.py
 税制改正モジュール（01〜06 から呼び出される共通モジュール）。法律で決まる計算と、税制改正の補正ルールを持つ。
 
 【構成】
-  - compute_* 関数 : 年度で決まる恒久的な計算式（給与所得控除・公的年金等控除・基礎控除・非課税判定 など）
-  - REFORMS（末尾）: 期間限定・単年の補正ルール。active で有効/無効を切り替える（ここが唯一の正）
+  - 年度別の表（冒頭）: 法律・条例で決まる値（給与所得控除の最低額・均等割・非課税基準・住宅ローン控除の上限 など）。
+                        改正されたら施行年度の行を足す。自治体固有の値（均等割・非課税基準）も、実データの自治体に合わせてここを直す
+  - compute_* 関数 : 年度で決まる恒久的な計算式（給与所得控除・公的年金等控除・基礎控除・非課税判定 など）。金額は年度別の表から引く
+  - REFORMS（末尾）: 期間限定・単年の補正ルールと、個人データでは表せない改正の集計補正（06）。active で有効/無効を切り替える（ここが唯一の正）
   - 記録（スナップショット）: REFORMS の内容を models/tax_reform_snapshot.json に書き出す（閲覧専用。パイプラインは読まない）
 
 【使い方】
@@ -33,12 +35,53 @@ import os
 import numpy as np
 import pandas as pd
 from config import (
-    NON_TAXABLE_PER_PERSON,
-    NON_TAXABLE_FLAT,
-    NON_TAXABLE_FAMILY_ADD,
     TARGET_COL,
     TAX_REFORM_SNAPSHOT_PATH,
 )
+
+
+# ─────────────────────────────────────────────
+# 法律・条例で決まる値（年度別の表）
+# ─────────────────────────────────────────────
+# キーは住民税の年度（データの「年度」列と同じ）。改正されたら、施行年度の行を足す（古い行は消さない）。
+# 「自治体固有」と書いた値は、実データの自治体に合わせてここを直す。
+SALARY_DEDUCTION_FLOOR = {2020: 550_000, 2026: 650_000}   # 給与所得控除の最低額（令和7年度税制改正で 2026年度から65万円）
+MIN_TAX_BY_YEAR        = {2020: 5_300}                    # 均等割（道府県1,800＋市町村3,500）。自治体固有（標準は5,000円。超過課税を含む）
+                                                          # 2024年度以降は森林環境税1,000円が加わったが、住民税が1,000円減り、合計5,300円のまま
+NON_TAXABLE_BY_YEAR    = {                                # 非課税基準（地方税法第295条）。自治体固有（級地。ここは1級地の値）
+    2020: {
+        "per_person": 350_000,   # 本人＋扶養等1人あたりの額
+        "flat"      : 100_000,   # 固定の加算額
+        "family_add": 210_000,   # 配偶者・扶養親族がいる場合の追加加算
+    },
+}                                                         # 寒冷地加算等は考慮しない
+HOUSING_CREDIT_UPPER   = {2020: 136_500}                  # 住宅ローン控除の住民税控除上限（令和4年以降入居。令和3年以前は97,500円等。租税特別措置法）
+DEPENDENT_DEDUCTION    = 330_000                          # 扶養控除（一般）の1人あたり額
+SPECIAL_RELATIVE_DEDUCTION_MAX = {2026: 450_000}          # 特定親族特別控除（19〜22歳の親族）の住民税の上限（令和7年度税制改正。親族の所得に応じて逓減）
+INCOME_LEVY_RATE       = 0.10                             # 所得割の税率（道府県4%＋市町村6%）
+
+
+def _by_year(table: dict, year: int):
+    """年度別の表から、year 以前で最も新しい年度の値を返す。表の最初の年度より前はエラー（黙って別の値を使わないため）。"""
+    keys = [k for k in table if k <= int(year)]
+    if not keys:
+        raise ValueError(f"{year}年度の値が表にありません（表の最初は {min(table)} 年度）")
+    return table[max(keys)]
+
+
+def get_min_tax(year: int) -> int:
+    """均等割（課税者の税額の下限）。"""
+    return _by_year(MIN_TAX_BY_YEAR, year)
+
+
+def get_housing_credit_upper(year: int) -> int:
+    """住宅ローン控除の住民税控除上限。"""
+    return _by_year(HOUSING_CREDIT_UPPER, year)
+
+
+def get_special_relative_deduction_max(year: int) -> int:
+    """特定親族特別控除の住民税の上限（2026年度から）。"""
+    return _by_year(SPECIAL_RELATIVE_DEDUCTION_MAX, year)
 
 
 # ─────────────────────────────────────────────
@@ -91,9 +134,9 @@ def compute_salary_deduction(income_gross: np.ndarray, year: int) -> np.ndarray:
     """
     給与収入から給与所得控除額を計算する（年度対応）。
 
-    2026年以降は最低額が 55万 → 65万 に引き上げられる。
+    最低額は SALARY_DEDUCTION_FLOOR（2026年度以降は 55万 → 65万）。
     """
-    floor = 650_000 if year >= 2026 else 550_000
+    floor = _by_year(SALARY_DEDUCTION_FLOOR, year)
     return _calc_salary_deduction(np.asarray(income_gross, dtype=float), float(floor))
 
 
@@ -213,7 +256,7 @@ def estimate_furusato_resident_deduction(
 
     donation  = income * donation_rate
     net       = np.maximum(donation - 2_000, 0.0)
-    upper     = income * 0.10 * 0.20           # 住民税所得割額 × 20%
+    upper     = income * INCOME_LEVY_RATE * 0.20   # 住民税所得割額 × 20%
 
     deduct_one_stop = np.minimum(net, upper)
     deduct_final    = np.minimum(net * (1.0 - tax_rate), upper)
@@ -226,11 +269,12 @@ def compute_non_taxable_flag(
     income_total: np.ndarray,
     n_dependents: np.ndarray,
     has_spouse:   np.ndarray,
+    year: int | None = None,
 ) -> np.ndarray:
     """
     住民税非課税（均等割・所得割とも非課税）に該当するかを判定する。
 
-    非課税条件（地方税法第295条）:
+    非課税条件（地方税法第295条。金額は NON_TAXABLE_BY_YEAR、1級地の場合）:
       扶養なし: 合計所得 ≤ 45万円  (35万+10万)
       扶養あり: 合計所得 ≤ 35万 × (1+N) + 31万  (N = 控除対象配偶者 + 扶養親族数)
 
@@ -239,14 +283,42 @@ def compute_non_taxable_flag(
         n_dependents : 扶養親族数（整数配列）
         has_spouse   : 配偶者控除（deduct_spouse > 0）がある場合 1、ない場合 0
                       ※配偶者特別控除は控除対象配偶者に該当しないため含まない
+        year         : 住民税の年度。省略すると表の最新の値を使う
 
     Returns:
         True なら非課税 → tax_amount = 0 とすること
     """
+    nt = NON_TAXABLE_BY_YEAR[max(NON_TAXABLE_BY_YEAR)] if year is None else _by_year(NON_TAXABLE_BY_YEAR, year)
     n_family  = np.asarray(has_spouse, dtype=int) + np.asarray(n_dependents, dtype=int)
-    threshold = NON_TAXABLE_PER_PERSON * (1 + n_family) + NON_TAXABLE_FLAT
-    threshold = np.where(n_family > 0, threshold + NON_TAXABLE_FAMILY_ADD, threshold)
+    threshold = nt["per_person"] * (1 + n_family) + nt["flat"]
+    threshold = np.where(n_family > 0, threshold + nt["family_add"], threshold)
     return np.asarray(income_total, dtype=float) <= threshold
+
+
+def non_taxable_flag_from_df(df: pd.DataFrame) -> np.ndarray:
+    """
+    データフレームから非課税判定を行う（04・05 で共用）。年度ごとにその年度の基準で判定する。
+
+    扶養人数の列がなければ、扶養控除額 ÷ DEPENDENT_DEDUCTION で人数を推計する。
+    年度の列がなければ（05 の --file で読んだCSVなど）、表の最新の基準で判定する。
+    """
+    n_dep = df["扶養人数"].values if "扶養人数" in df.columns \
+        else (df["扶養控除"].values / DEPENDENT_DEDUCTION).round().astype(int)
+    income     = df["総所得金額等"].values
+    has_spouse = (df["配偶者控除"].values > 0).astype(int)
+    if "年度" not in df.columns:
+        return compute_non_taxable_flag(income, n_dep, has_spouse)
+    years      = df["年度"].values
+    flag       = np.zeros(len(df), dtype=bool)
+    for y in np.unique(years):
+        m = years == y
+        flag[m] = compute_non_taxable_flag(income[m], n_dep[m], has_spouse[m], year=int(y))
+    return flag
+
+
+def min_tax_for_rows(df: pd.DataFrame) -> np.ndarray:
+    """各行の年度の均等割（予測値の下限）を返す。"""
+    return df["年度"].map({y: get_min_tax(y) for y in df["年度"].unique()}).values
 
 
 def compute_basic_deduction(income_total: np.ndarray) -> np.ndarray:
@@ -476,7 +548,7 @@ def _apply_salary_deduction_floor(df: pd.DataFrame, params: dict) -> pd.DataFram
         ).fillna(0).clip(0, 1)
 
     max_inc  = deduction_increase[mask].max()
-    total_red = (deduction_increase[mask] * 0.10).sum() / 1e8
+    total_red = (deduction_increase[mask] * INCOME_LEVY_RATE).sum() / 1e8
     median_gross = (df.loc[mask, "給与収入"].median() if "給与収入" in df.columns
                     else df.loc[mask, "給与所得"].median()) / 1e4
     print(f"    給与所得控除引き上げ: {n:,}人対象 / 対象者給与収入中央値 {median_gross:.0f}万円 / "

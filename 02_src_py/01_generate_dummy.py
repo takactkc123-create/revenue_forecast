@@ -35,6 +35,7 @@ from tax_reform import (
     compute_basic_deduction,
     estimate_furusato_resident_deduction,
     compute_non_taxable_flag,
+    get_housing_credit_upper,
 )
 from config import (
     RANDOM_SEED, N_PER_YEAR, TURNOVER_RATE, POPULATION_GROWTH_RATES, GENDER_RATIO,
@@ -341,7 +342,7 @@ def generate_dummy(n_per_year: int = N_PER_YEAR, years: list = None) -> pd.DataF
     housing_probs      = np.array([HOUSING_PROB_BY_AGE.get(ag, 0.0) for ag in age_group_arr])
     deduct_tax_housing = np.where(
         rng.random(n) < housing_probs,
-        rng.integers(50_000, HOUSING_PARAMS["upper_limit"] + 1, size=n), 0,
+        rng.integers(50_000, get_housing_credit_upper(years[0]) + 1, size=n), 0,
     ).astype(int)
 
     deduct_tax_furusato = estimate_furusato_resident_deduction(
@@ -634,7 +635,7 @@ def generate_dummy(n_per_year: int = N_PER_YEAR, years: list = None) -> pd.DataF
         new_h_probs  = np.array([HOUSING_PROB_BY_AGE.get(ag, 0.0) for ag in new_age_groups])
         new_housing  = np.where(
             rng.random(n_new) < new_h_probs,
-            rng.integers(50_000, HOUSING_PARAMS["upper_limit"] + 1, size=n_new), 0,
+            rng.integers(50_000, get_housing_credit_upper(yr) + 1, size=n_new), 0,
         ).astype(int)
         new_furusato = estimate_furusato_resident_deduction(
             new_taxable,

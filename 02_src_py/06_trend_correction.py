@@ -68,7 +68,10 @@ from scipy import stats
 if os.path.basename(os.getcwd()) == "02_src_py":
     os.chdir("..")
 
-from tax_reform import load_reforms, print_reform_summary
+from tax_reform import (
+    load_reforms, print_reform_summary,
+    DEPENDENT_DEDUCTION, INCOME_LEVY_RATE, get_special_relative_deduction_max,
+)
 from config import (
     PREPARED_DATA_PATH,
     PREDICT_YEAR, TARGET_COL, CONFORMAL_COVERAGE,
@@ -133,20 +136,23 @@ def compute_yearly_ci(bt_df: pd.DataFrame, total_oku: float, coverage: float):
 
 
 # ─── 税制改正マクロ補正 ───────────────────────────────────────────────────────
+def apply_macro_reforms(
+    pred_total_oku: float,
+    n_taxable: int,
+    target_year: int,
+    df_prep: pd.DataFrame,
+) -> tuple[float, list]:
     """
     個人レベルで反映できない税制改正を集計レベルで補正する。
     tax_reform.py の REFORMS の macro_correction タイプを読み込んで適用する。
 
+    対象人数は課税者数（05 の予測で0円より大きい人）に比率を掛けて推計する。
+    非課税者は控除が増えても税額が変わらないため、全人数を基準にすると補正が過大になる。
+    控除額・税率は tax_reform.py の表（DEPENDENT_DEDUCTION・特定親族特別控除の上限・INCOME_LEVY_RATE）から引く。
+
     Returns:
         (補正後合計_億円, 補正明細リスト)
     """
-
-def apply_macro_reforms(
-    pred_total_oku: float,
-    n_persons: int,
-    target_year: int,
-    df_prep: pd.DataFrame,
-) -> tuple[float, list]:
     reforms = load_reforms(
         target_year=target_year, reform_type="macro_correction"
     )
@@ -160,8 +166,8 @@ def apply_macro_reforms(
     #
     #   1. active を True に変更（変更後は uv run python 02_src_py/tax_reform.py で記録を更新）
     #   2. 必要に応じて params に下記 if/elif が参照するキーを追加する（未設定なら既定値で計算される）
-    #        dependent_income_limit     : new_dependent_rate（既定0.002）, deduction_per_person（既定330000）
-    #        special_dependent_allowance: target_rate（既定0.003）, deduction_per_person（既定450000）
+    #        dependent_income_limit     : new_dependent_rate（既定0.002。課税者に対する比率）, deduction_per_person（既定は DEPENDENT_DEDUCTION）
+    #        special_dependent_allowance: target_rate（既定0.003。課税者に対する比率）, deduction_per_person（既定は特定親族特別控除の上限）
     #      ※ 既存の old_limit/new_limit・age_from/age_to は改正内容の記録で、計算には使われない
     for r in reforms:
         name   = r["name"]
@@ -169,26 +175,26 @@ def apply_macro_reforms(
 
         if name == "dependent_income_limit":
             # 扶養要件引き上げ（扶養可能所得上限 48万→58万円）
-            # 新たに扶養に入る人数を推計し、1人あたり33万円の控除増 × 10% = 3.3万円減
+            # 新たに扶養に入る人数を推計し、1人あたり扶養控除額 × 所得割の税率だけ税額が減る
             rate       = float(params.get("new_dependent_rate", 0.002))
-            new_dep_n  = int(n_persons * rate)
-            deduct_pp  = float(params.get("deduction_per_person", 330_000))
-            tax_effect = -new_dep_n * deduct_pp * 0.10 / 1e8
+            new_dep_n  = int(n_taxable * rate)
+            deduct_pp  = float(params.get("deduction_per_person", DEPENDENT_DEDUCTION))
+            tax_effect = -new_dep_n * deduct_pp * INCOME_LEVY_RATE / 1e8
             total     += tax_effect
             msg = (f"  扶養要件引き上げ: +{new_dep_n:,}人 × "
-                   f"{deduct_pp/1e4:.0f}万控除 × 10% = {tax_effect:.3f}億円")
+                   f"{deduct_pp/1e4:.0f}万控除 × {INCOME_LEVY_RATE:.0%} = {tax_effect:.3f}億円")
             print(msg)
             adjustments.append({"name": name, "effect_oku": round(tax_effect, 4), "memo": msg.strip()})
 
         elif name == "special_dependent_allowance":
             # 特定親族特別控除（19-22歳扶養親族への追加控除）
             rate        = float(params.get("target_rate", 0.003))
-            target_n    = int(n_persons * rate)
-            deduct_pp   = float(params.get("deduction_per_person", 450_000))
-            tax_effect  = -target_n * deduct_pp * 0.10 / 1e8
+            target_n    = int(n_taxable * rate)
+            deduct_pp   = float(params.get("deduction_per_person", get_special_relative_deduction_max(target_year)))
+            tax_effect  = -target_n * deduct_pp * INCOME_LEVY_RATE / 1e8
             total      += tax_effect
             msg = (f"  特定親族特別控除: {target_n:,}人 × "
-                   f"{deduct_pp/1e4:.0f}万控除 × 10% = {tax_effect:.3f}億円")
+                   f"{deduct_pp/1e4:.0f}万控除 × {INCOME_LEVY_RATE:.0%} = {tax_effect:.3f}億円")
             print(msg)
             adjustments.append({"name": name, "effect_oku": round(tax_effect, 4), "memo": msg.strip()})
 
@@ -249,8 +255,9 @@ def main():
     # ── B. 税制改正マクロ補正 ─────────────────────────────────────────────────
     print("── 税制改正マクロ補正 ──")
     df_prep = pd.read_csv(PREPARED_DATA_PATH, encoding="utf-8-sig")
+    n_taxable = int((pred_tax > 0).sum())   # 課税者数（非課税者は控除が増えても税額が変わらない）
     total_after_macro, adjustments = apply_macro_reforms(
-        total_after_trend, n_persons, args.year, df_prep
+        total_after_trend, n_taxable, args.year, df_prep
     )
     macro_effect = total_after_macro - total_after_trend
 

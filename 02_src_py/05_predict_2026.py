@@ -49,12 +49,13 @@ if os.path.basename(os.getcwd()) == "02_src_py":
 from tax_reform import (
     load_reforms, apply_reforms, print_reform_summary,
     compute_salary_income, compute_basic_deduction,
-    estimate_furusato_resident_deduction, compute_non_taxable_flag,
+    estimate_furusato_resident_deduction,
+    get_min_tax, get_housing_credit_upper, non_taxable_flag_from_df,
 )
 from config import (
     PREPARED_DATA_PATH, MODEL_PATH, MODEL_CONFIG_PATH,
     PREDICT_YEAR, FEATURE_COLS, TARGET_COL,
-    FURUSATO_PARAMS, HOUSING_PARAMS, MIN_TAX, CONFORMAL_COVERAGE,
+    FURUSATO_PARAMS, HOUSING_PARAMS, CONFORMAL_COVERAGE,
     WAGE_RATE_OVERRIDE, WAGE_RATE_DELTA, LGBM_PARAMS, ALL_INCOME_COLS,
 )
 
@@ -63,7 +64,6 @@ from config import (
 def load_model_config(path: str) -> dict:
     with open(path, encoding="utf-8") as f:
         config = json.load(f)
-    config.setdefault("min_tax", MIN_TAX)
     return config
 
 
@@ -72,13 +72,14 @@ def _estimate_housing_credit(
     prev_df: pd.DataFrame,
     n: int,
     rng: np.random.Generator,
+    target_year: int,
 ) -> np.ndarray:
     if "住宅借入金特別控除" not in prev_df.columns:
         return np.zeros(n, dtype=int)
     prev_housing = prev_df["住宅借入金特別控除"].values.astype(float)
     keep         = rng.random(n) >= HOUSING_PARAMS["annual_exit_rate"]
     result       = np.where(keep, prev_housing, 0.0)
-    return np.minimum(result, HOUSING_PARAMS["upper_limit"]).round(0).astype(int)
+    return np.minimum(result, get_housing_credit_upper(target_year)).round(0).astype(int)
 
 
 # ─── Split Conformal Prediction（信頼区間） ───────────────────────────────────
@@ -108,7 +109,7 @@ def compute_conformal_interval(
     )
     pred_calib = np.maximum(
         model_c.predict(df_test[feature_cols].fillna(0).values),
-        config["min_tax"],
+        get_min_tax(config["test_year"]),
     )
     actual_calib = df_prep[df_prep["年度"] == config["test_year"]][TARGET_COL].values
     scores = np.abs(actual_calib - pred_calib)
@@ -230,7 +231,7 @@ def estimate_next_year(
 
     # 税額控除推計
     print("  税額控除推計:")
-    next_df["住宅借入金特別控除"] = _estimate_housing_credit(base_df, len(next_df), rng)
+    next_df["住宅借入金特別控除"] = _estimate_housing_credit(base_df, len(next_df), rng, target_year)
     next_df["寄附金税額控除"] = estimate_furusato_resident_deduction(
         next_df["課税標準額"].values,
         donation_rate=FURUSATO_PARAMS["donation_rate"],
@@ -250,21 +251,10 @@ def estimate_next_year(
 BACKTEST_PATH = "data/05out_forecast_backtest.csv"
 
 
-def _non_taxable_flag(df: pd.DataFrame) -> np.ndarray:
-    """非課税判定（地方税法295条）。本番の予測と過去年検証で同じものを使う。"""
-    n_dep = df["扶養人数"].values if "扶養人数" in df.columns \
-        else (df["扶養控除"].values / 330_000).round().astype(int)
-    return compute_non_taxable_flag(
-        df["総所得金額等"].values, n_dep,
-        (df["配偶者控除"].values > 0).astype(int),
-    )
-
-
 def run_forecast_backtest(
     df_prep: pd.DataFrame,
     feature_cols: list,
     lgbm_params: dict,
-    min_tax: int,
     min_train: int = 2,
 ) -> pd.DataFrame:
     """
@@ -287,8 +277,8 @@ def run_forecast_backtest(
         with contextlib.redirect_stdout(io.StringIO()):
             nx = estimate_next_year(hist, t, wage_rate=None, wage_delta=0.0)
             nx = apply_reforms(nx, load_reforms(target_year=t, reform_type="feature_correction"))
-        pred = np.maximum(m.predict(nx[feature_cols].fillna(0).values), min_tax)
-        pred = np.where(_non_taxable_flag(nx), 0, pred)
+        pred = np.maximum(m.predict(nx[feature_cols].fillna(0).values), get_min_tax(t))
+        pred = np.where(non_taxable_flag_from_df(nx), 0, pred)
 
         act = df_prep.loc[df_prep["年度"] == t, TARGET_COL]
         rows.append({
@@ -329,7 +319,7 @@ def main():
     # config.py で設定した MODEL_CONFIG_PATH（models/04out_model_config.json）を読み込む
     config       = load_model_config(MODEL_CONFIG_PATH)
     feature_cols = config["feature_cols"]
-    min_tax      = config["min_tax"]
+    min_tax      = get_min_tax(args.year)   # 予測年度の均等割（tax_reform.py の表）
 
     df_prep = pd.read_csv(PREPARED_DATA_PATH, encoding="utf-8-sig")
     df_prep[feature_cols] = df_prep[feature_cols].fillna(0)
@@ -402,8 +392,8 @@ def main():
     pred_tax_upper = (pred_tax + q_cov).round(0).astype(int)
 
     # ── 非課税者の予測・信頼区間を 0 に上書き ────────────────────────────────
-    # MIN_TAX（均等割）は課税者の下限。非課税基準以下の人には適用しない。
-    _non_taxable = _non_taxable_flag(pred_df_out)
+    # 均等割（min_tax）は課税者の下限。非課税基準以下の人には適用しない。
+    _non_taxable = non_taxable_flag_from_df(pred_df_out)
     pred_tax       = np.where(_non_taxable, 0, pred_tax)
     pred_tax_lower = np.where(_non_taxable, 0, pred_tax_lower)
     pred_tax_upper = np.where(_non_taxable, 0, pred_tax_upper)
@@ -478,7 +468,7 @@ def main():
         print("\n過去年検証: スキップ（--no-backtest）。06 は前回の結果ファイルを使う")
     else:
         print("\n── 過去年検証（05 と同じ方法で過去年を予測し、実績と比べる） ──")
-        bt_df = run_forecast_backtest(df_prep, feature_cols, config["lgbm_params"], min_tax)
+        bt_df = run_forecast_backtest(df_prep, feature_cols, config["lgbm_params"])
         bt_df.to_csv(BACKTEST_PATH, index=False, encoding="utf-8-sig")
         print(bt_df.to_string(index=False))
         print(f"  平均誤差率 {bt_df['誤差率_%'].mean():+.2f}%  標準偏差 {bt_df['誤差率_%'].std():.2f}%")
