@@ -188,11 +188,18 @@ def fig4_prediction_summary(year: int, show: bool):
     n_people = int(s["予測人員"])
     n_taxable = int(s["課税者数"]) if "課税者数" in s.index else None  # 2026-09-09追加
 
-    final_adj = None
+    # 06 のサマリーがあれば、中央値・信頼区間・前年比を 06（補正後）の値にそろえる
+    pre_central = central   # 05 の予測（06 補正前）。表に参考として残す
+    adjusted    = False
     if os.path.exists(adj_path):
         a = pd.read_csv(adj_path, encoding="utf-8-sig").iloc[0]
         if "最終予測合計_億円" in a.index:
-            final_adj = float(a["最終予測合計_億円"])
+            central  = float(a["最終予測合計_億円"])
+            pct_chg  = (central - prev_act) / prev_act * 100
+            adjusted = True
+            if "CI下限_95%_億円" in a.index:   # 06 が個人別の補正後の区間を合計したもの
+                ci_low  = float(a["CI下限_95%_億円"])
+                ci_high = float(a["CI上限_95%_億円"])
 
     fig, (ax_main, ax_tbl) = plt.subplots(
         2, 1, figsize=(11, 7),
@@ -258,8 +265,8 @@ def fig4_prediction_summary(year: int, show: bool):
     ]
     if n_taxable is not None:  # 2026-09-09追加: 非課税者を除いた課税者数
         table_data.append(["うち課税者数（非課税除く）", f"{n_taxable:,} 人", f"{year}年度 推計"])
-    if final_adj is not None:
-        table_data.insert(4, ["補正後最終値", f"{final_adj:.2f} 億円", "06 マクロ補正後"])
+    if adjusted:   # 06 の補正前の値（05 の予測）を参考として残す
+        table_data.insert(4, ["参考: 05の予測（06補正前）", f"{pre_central:.2f} 億円", "06 のトレンド・税制改正補正の前"])
 
     tbl = ax_tbl.table(
         cellText=table_data,
@@ -382,11 +389,16 @@ def fig6_tax_timeseries(yearly_df: pd.DataFrame, year: int, show: bool):
     ci_high   = float(s["CI上限_95%_億円"])
     pct_chg   = float(s["前年比率_%"])
 
-    # 補正後最終値があれば上書き
+    # 06 のサマリーがあれば、予測値・信頼区間・前年比を 06（補正後）の値にそろえる
     if os.path.exists(adj_path):
         a = pd.read_csv(adj_path, encoding="utf-8-sig").iloc[0]
         if "最終予測合計_億円" in a.index:
+            prev_act = float(s["前年実績_億円"])
             pred_val = float(a["最終予測合計_億円"])
+            pct_chg  = (pred_val - prev_act) / prev_act * 100
+            if "CI下限_95%_億円" in a.index:
+                ci_low  = float(a["CI下限_95%_億円"])
+                ci_high = float(a["CI上限_95%_億円"])
 
     # 実績系列（04out_yearly_result.csv の actual_oku）
     hist_years = yearly_df["年度"].tolist()

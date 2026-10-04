@@ -243,12 +243,23 @@ def main():
 
     out_df.to_csv(out_path, index=False, encoding="utf-8-sig")
 
+    # 補正後の信頼区間: 個人別の補正後の下限・上限を合計する（05 と同じ計算方法）
+    lower_col = next((c for c in out_df.columns if c.startswith("pred_tax_lower")), None)
+    upper_col = next((c for c in out_df.columns if c.startswith("pred_tax_upper")), None)
+    ci_cols = {}
+    if lower_col and upper_col:
+        pct = lower_col.rsplit("_", 1)[-1]   # 例: pred_tax_lower_95 → "95"
+        ci_cols = {
+            f"CI下限_{pct}%_億円": round(out_df[lower_col].sum() / 1e8, 2),
+            f"CI上限_{pct}%_億円": round(out_df[upper_col].sum() / 1e8, 2),
+        }
     summary_rows = [{
         "予測年度"          : args.year,
         "補正前合計_億円"   : round(total_before_oku, 2),
         "トレンド補正乗率"  : trend_factor,
         "マクロ補正効果_億円": round(macro_effect, 3),
         "最終予測合計_億円" : round(total_final, 2),
+        **ci_cols,
         "予測人員"          : n_persons,
     }]
     for adj in adjustments:
