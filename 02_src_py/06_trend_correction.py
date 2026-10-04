@@ -5,7 +5,7 @@
 【補正の種類】
   A. トレンド補正（wage_trend_factor）
      - 年度別合算予測の系統的な過大・過小傾向を緩和する乗率補正
-     - 04 の 04out_yearly_result.csv に基づいて自動算出（オプションで上書き可）
+     - 05 の過去年検証（05out_forecast_backtest.csv。05 と同じ方法で過去年を予測した誤差）から自動算出（オプションで上書き可）
 
   B. 税制改正マクロ補正（tax_reform.py の REFORMS の macro_correction）
      - 扶養要件引き上げ（2026年〜）: 扶養控除新規取得者の増加分を推計して加算
@@ -13,7 +13,7 @@
 
 【import】
   data/05out_prediction_YYYY.csv      ← 05 の出力
-  data/04out_yearly_result.csv        ← 04 の出力
+  data/05out_forecast_backtest.csv    ← 05 の出力（過去年検証）
   data/03out_individual_prepared.csv  ← 03 の出力
 
 【export】
@@ -41,9 +41,10 @@
   根拠値は実データなら「前年にいたIDのうち翌年消えた割合 −  新規に現れたIDの割合」
   （＝消滅率と新規率の差引き）から算出できる。
 
-  ※ 引数なしで実行したときの自動算出（compute_trend_factor）は、04 の訓練年の
-    予測誤差＝モデルの系統的なズレを打ち消すものであり、人口動態は一切見ていない。
-    訓練年の誤差が小さいと乗率は 1.0 になり「補正なし」となる点に注意。
+  ※ 引数なしで実行したときの自動算出（compute_trend_factor）は、05 の過去年検証の
+    平均誤差率（所得の外挿・対象者の固定などをすべて含む誤差）を打ち消すものである。
+    人口の増減も誤差に含まれるが、人口として個別には見ていない。
+    --factor を指定すると自動算出は使わない（人口の想定と自動算出は併用できない）。
   ※ tax_reform.py の REFORMS の macro_correction に人口減少の行を追加しても効かない
     （apply_macro_reforms が扱うのは dependent_income_limit /
      special_dependent_allowance の2つのみ。それ以外は「未実装」警告を出して無視する）。
@@ -66,27 +67,35 @@ from config import (
     PREDICT_YEAR, TARGET_COL,
 )
 
-YEARLY_PATH = "data/04out_yearly_result.csv"
+BACKTEST_PATH = "data/05out_forecast_backtest.csv"   # 05 の過去年検証（トレンド補正の根拠）
 
 
 # ─── トレンド補正乗率の算出 ───────────────────────────────────────────────────
-def compute_trend_factor(yearly_df: pd.DataFrame) -> float:
+def compute_trend_factor(bt_df: pd.DataFrame) -> tuple[float, str]:
     """
-    04 の年度別合算精度（04out_yearly_result.csv）を使い、
-    訓練年の平均誤差率からトレンド補正乗率を算出する。
+    05 の過去年検証（05out_forecast_backtest.csv）の平均誤差率からトレンド補正乗率を算出する。
+    過去年検証は、05 と同じ方法（直近年をコピーして所得を伸ばす）で過去の各年を予測し、実績と比べたもの。
 
-    誤差率 = (予測 − 実測) / 実測
+    誤差率 = (予測 − 実績) / 実績
     乗率   = 1 / (1 + 平均誤差率)
 
     例: 平均誤差率 +2% → 乗率 0.980（予測を 2% 引き下げ）
         平均誤差率 -1% → 乗率 1.010（予測を 1% 引き上げ）
+
+    「人口補正後誤差率_%」の列があればそちらを使う（人口乗率を掛けた後に残る誤差だけを補正し、二重補正を防ぐ）。
+
+    Returns:
+        (乗率, 根拠の説明文)
     """
-    train_rows = yearly_df[~yearly_df["is_test"]]
-    if train_rows.empty:
-        return 1.0
-    mean_err_rate = train_rows["error_rate_pct"].mean() / 100.0
-    factor        = 1.0 / (1.0 + mean_err_rate)
-    return round(factor, 4)
+    if bt_df.empty:
+        return 1.0, "過去年検証の結果が空 → 補正なし"
+    err_col  = "人口補正後誤差率_%" if "人口補正後誤差率_%" in bt_df.columns else "誤差率_%"
+    mean_err = bt_df[err_col].mean()
+    std_err  = bt_df[err_col].std()
+    factor   = round(1.0 / (1.0 + mean_err / 100.0), 4)
+    years    = f"{bt_df['予測年度'].min()}〜{bt_df['予測年度'].max()}"
+    basis    = f"05方式の過去年検証 {years} 平均{err_col.removesuffix('_%')} {mean_err:+.2f}%（標準偏差 {std_err:.2f}%）"
+    return factor, basis
 
 
 # ─── 税制改正マクロ補正 ───────────────────────────────────────────────────────
@@ -183,18 +192,20 @@ def main():
     # ── A. トレンド補正 ───────────────────────────────────────────────────────
     if args.no_trend:
         trend_factor = 1.0
+        trend_basis  = "スキップ（--no-trend）"
         print("トレンド補正: スキップ（--no-trend）")
     elif args.factor is not None:
         trend_factor = args.factor
+        trend_basis  = "直接指定（--factor）"
         print(f"トレンド補正乗率（直接指定）: {trend_factor:.4f}")
-    elif os.path.exists(YEARLY_PATH):
-        yearly_df    = pd.read_csv(YEARLY_PATH, encoding="utf-8-sig")
-        trend_factor = compute_trend_factor(yearly_df)
-        mean_err_pct = yearly_df[~yearly_df["is_test"]]["error_rate_pct"].mean()
-        print(f"トレンド補正（自動算出）: 訓練年平均誤差率 {mean_err_pct:+.2f}% → 乗率 {trend_factor:.4f}")
+    elif os.path.exists(BACKTEST_PATH):
+        bt_df        = pd.read_csv(BACKTEST_PATH, encoding="utf-8-sig")
+        trend_factor, trend_basis = compute_trend_factor(bt_df)
+        print(f"トレンド補正（自動算出）: {trend_basis} → 乗率 {trend_factor:.4f}")
     else:
         trend_factor = 1.0
-        print(f"トレンド補正: {YEARLY_PATH} なし → 乗率 1.0（補正なし）")
+        trend_basis  = f"{BACKTEST_PATH} なし → 補正なし"
+        print(f"トレンド補正: {BACKTEST_PATH} なし → 乗率 1.0（補正なし）。先に 05_predict_2026.py を実行してください")
 
     pred_tax_after_trend = (pred_tax * trend_factor).round(0).astype(int)
     total_after_trend    = pred_tax_after_trend.sum() / 1e8
@@ -257,6 +268,7 @@ def main():
         "予測年度"          : args.year,
         "補正前合計_億円"   : round(total_before_oku, 2),
         "トレンド補正乗率"  : trend_factor,
+        "トレンド補正_根拠" : trend_basis,
         "マクロ補正効果_億円": round(macro_effect, 3),
         "最終予測合計_億円" : round(total_final, 2),
         **ci_cols,

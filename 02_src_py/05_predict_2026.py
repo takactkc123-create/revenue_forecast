@@ -14,6 +14,7 @@ tax_reform.py の REFORMS（feature_correction）を適用して税制改正を�
   uv run python 05_predict_2026.py --file data/individual_2026_input.csv  # 実データがある場合
   uv run python 05_predict_2026.py --wage-rate 0.025   # 給与上昇率を直接指定
   uv run python 05_predict_2026.py --wage-delta 0.013  # 実績トレンド + 1.3%
+  uv run python 05_predict_2026.py --no-backtest       # 過去年検証を省略（約30秒短縮）
 
 【import】
   data/03out_individual_prepared.csv  ← 03 の出力
@@ -25,11 +26,14 @@ tax_reform.py の REFORMS（feature_correction）を適用して税制改正を�
 【export】
   data/05out_prediction_YYYY.csv          ← 個人別予測値（信頼区間付き）
   data/05out_prediction_summary_YYYY.csv  ← 合計・信頼区間サマリー
+  data/05out_forecast_backtest.csv        ← 05 と同じ方法で過去年を予測した誤差（06 のトレンド補正の根拠）
 
 
 """
 
 import argparse
+import contextlib
+import io
 import json
 import os
 import numpy as np
@@ -240,6 +244,64 @@ def estimate_next_year(
     return next_df
 
 
+# ─── 過去年検証（06 のトレンド補正の根拠） ─────────────────────────────────────
+BACKTEST_PATH = "data/05out_forecast_backtest.csv"
+
+
+def _non_taxable_flag(df: pd.DataFrame) -> np.ndarray:
+    """非課税判定（地方税法295条）。本番の予測と過去年検証で同じものを使う。"""
+    n_dep = df["扶養人数"].values if "扶養人数" in df.columns \
+        else (df["扶養控除"].values / 330_000).round().astype(int)
+    return compute_non_taxable_flag(
+        df["総所得金額等"].values, n_dep,
+        (df["配偶者控除"].values > 0).astype(int),
+    )
+
+
+def run_forecast_backtest(
+    df_prep: pd.DataFrame,
+    feature_cols: list,
+    lgbm_params: dict,
+    min_tax: int,
+    min_train: int = 2,
+) -> pd.DataFrame:
+    """
+    05 と同じ方法で過去年を予測し、実績と比べる（06 のトレンド補正の根拠）。
+
+    04 の検証は検証年の本当の特徴量で予測するため、モデル自体の誤差しか測れない。
+    本番の予測では estimate_next_year() で特徴量を推計するので、その誤差も含めてここで測る。
+    各年 t について、t より前の年だけで学習し、estimate_next_year(t より前, t) の特徴量で予測する。
+    賃金上昇率は実績のトレンドを使う（--wage-rate / --wage-delta は将来についての判断なので、ここでは使わない）。
+    """
+    years = sorted(df_prep["年度"].unique().tolist())
+    rows  = []
+    for t in [y for y in years if len([p for p in years if p < y]) >= min_train]:
+        hist = df_prep[df_prep["年度"] < t].copy()
+        tr   = apply_reforms(hist.copy(), load_reforms(target_year=t - 1, reform_type="label_correction"))
+        m    = lgb.LGBMRegressor(**lgbm_params)
+        m.fit(tr[feature_cols].values, tr[TARGET_COL].values, callbacks=[lgb.log_evaluation(period=-1)])
+
+        # estimate_next_year() と補正ルールの途中経過は、4年分だと長いので表示しない
+        with contextlib.redirect_stdout(io.StringIO()):
+            nx = estimate_next_year(hist, t, wage_rate=None, wage_delta=0.0)
+            nx = apply_reforms(nx, load_reforms(target_year=t, reform_type="feature_correction"))
+        pred = np.maximum(m.predict(nx[feature_cols].fillna(0).values), min_tax)
+        pred = np.where(_non_taxable_flag(nx), 0, pred)
+
+        act = df_prep.loc[df_prep["年度"] == t, TARGET_COL]
+        rows.append({
+            "予測年度"         : t,
+            "訓練年"           : f"{min(hist['年度'])}〜{t - 1}",
+            "実績_億円"        : round(act.sum() / 1e8, 2),
+            "予測_億円"        : round(pred.sum() / 1e8, 2),
+            "誤差率_%"         : round((pred.sum() - act.sum()) / act.sum() * 100, 2),
+            "人数_実績"        : len(act),
+            "人数_予測"        : len(nx),
+            "1人あたり誤差率_%": round((pred.mean() - act.mean()) / act.mean() * 100, 2),
+        })
+    return pd.DataFrame(rows)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--year", type=int, default=PREDICT_YEAR,
@@ -251,6 +313,8 @@ def main():
                           help="給与収入上昇率を直接指定（例: 0.025 → +2.5%%）")
     wage_grp.add_argument("--wage-delta", type=float, default=WAGE_RATE_DELTA,
                           help="実績トレンドへの加算値（例: 0.013 → +1.3%%）")
+    parser.add_argument("--no-backtest", action="store_true",
+                        help="過去年検証（06 のトレンド補正の根拠）を省略する（約30秒短縮）")
     args = parser.parse_args()
 
     print(f"=== 05: {args.year}年度 予測 ===\n")
@@ -337,12 +401,7 @@ def main():
 
     # ── 非課税者の予測・信頼区間を 0 に上書き ────────────────────────────────
     # MIN_TAX（均等割）は課税者の下限。非課税基準以下の人には適用しない。
-    _nd = pred_df_out["扶養人数"].values if "扶養人数" in pred_df_out.columns \
-        else (pred_df_out["扶養控除"].values / 330_000).round().astype(int)
-    _non_taxable = compute_non_taxable_flag(
-        pred_df_out["総所得金額等"].values, _nd,
-        (pred_df_out["配偶者控除"].values > 0).astype(int),
-    )
+    _non_taxable = _non_taxable_flag(pred_df_out)
     pred_tax       = np.where(_non_taxable, 0, pred_tax)
     pred_tax_lower = np.where(_non_taxable, 0, pred_tax_lower)
     pred_tax_upper = np.where(_non_taxable, 0, pred_tax_upper)
@@ -411,6 +470,18 @@ def main():
 
     print(f"\n→ {out_path} に個人別予測を保存")
     print(f"→ {sum_path} に集計サマリーを保存")
+
+    # ── 過去年検証（06 のトレンド補正の根拠） ──
+    if args.no_backtest:
+        print("\n過去年検証: スキップ（--no-backtest）。06 は前回の結果ファイルを使う")
+    else:
+        print("\n── 過去年検証（05 と同じ方法で過去年を予測し、実績と比べる） ──")
+        bt_df = run_forecast_backtest(df_prep, feature_cols, config["lgbm_params"], min_tax)
+        bt_df.to_csv(BACKTEST_PATH, index=False, encoding="utf-8-sig")
+        print(bt_df.to_string(index=False))
+        print(f"  平均誤差率 {bt_df['誤差率_%'].mean():+.2f}%  標準偏差 {bt_df['誤差率_%'].std():.2f}%")
+        print(f"→ {BACKTEST_PATH} に過去年検証の結果を保存")
+
     print("\n次: python 06_trend_correction.py")
 
 
