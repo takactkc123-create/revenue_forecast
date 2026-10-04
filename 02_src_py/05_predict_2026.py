@@ -129,7 +129,8 @@ def estimate_next_year(
     has_gross        = "給与収入" in df.columns
     salary_trend_col = "給与収入" if has_gross else "給与所得"
 
-    trend_cols = [salary_trend_col, "事業所得_営業等", "雑所得_公的年金等", "総所得金額等"]
+    # 年金は収入（雑収入）に伸び率を掛け、所得は控除を引き直して計算する。雑所得の伸び率は雑収入の列がないデータ用
+    trend_cols = [salary_trend_col, "事業所得_営業等", "雑収入_公的年金等", "雑所得_公的年金等", "総所得金額等"]
     yoy_rates  = {}
     for col in trend_cols:
         if col in df.columns:
@@ -151,7 +152,8 @@ def estimate_next_year(
         eff_wage_rate = base_wage_rate
         print(f"  給与収入上昇率（実績トレンド直近2年平均）: {eff_wage_rate*100:+.2f}%")
 
-    for col in ["事業所得_営業等", "雑所得_公的年金等", "総所得金額等"]:
+    pension_col = "雑収入_公的年金等" if "雑収入_公的年金等" in df.columns else "雑所得_公的年金等"   # 実際に伸び率を掛ける列
+    for col in ["事業所得_営業等", pension_col, "総所得金額等"]:
         if col in yoy_rates:
             print(f"  {col}: {yoy_rates[col]*100:+.2f}%")
 

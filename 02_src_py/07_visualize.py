@@ -428,6 +428,11 @@ def fig6_tax_timeseries(yearly_df: pd.DataFrame, year: int, show: bool):
     ax.plot([year - 0.12, year + 0.12], [ci_high, ci_high], "-", color="coral", linewidth=2.0)
 
     # 各ポイントに値ラベル
+    # 注記は軸の内側の上部に置く（軸の外に置くと、区間の上端が高いときに上の枠線と重なるため）
+    y_lo, y_hi = ax.get_ylim()
+    y_top = max(y_hi, ci_high) + (max(ci_high, max(all_vals)) - min(hist_vals)) * 0.25
+    ax.set_ylim(y_lo, y_top)
+
     for yr, val in zip(hist_years, hist_vals):
         ax.annotate(f"{val:.2f}億", (yr, val),
                     textcoords="offset points", xytext=(0, 10),
@@ -437,8 +442,9 @@ def fig6_tax_timeseries(yearly_df: pd.DataFrame, year: int, show: bool):
         f"予測: {pred_val:.2f}億\n（前年比 {pct_chg:+.2f}%）\n"
         f"CI [{ci_low:.2f}〜{ci_high:.2f}億]",
         xy=(year, pred_val),
-        xytext=(year - 0.6, pred_val + (max(all_vals) - min(all_vals)) * 0.18),
-        ha="center", fontsize=9, color="coral", fontweight="bold",
+        xytext=(year - 0.6, y_top - (y_top - y_lo) * 0.03),
+        ha="center", va="top", fontsize=9, color="coral", fontweight="bold",
+        bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.9),   # 境界の点線が文字に重ならないように
         arrowprops=dict(arrowstyle="-", color="coral", lw=1.0),
     )
 

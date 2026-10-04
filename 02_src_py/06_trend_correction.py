@@ -11,6 +11,12 @@
      - 扶養要件引き上げ（2026年〜）: 扶養控除新規取得者の増加分を推計して加算
      - 特定親族特別控除（2026年〜）: 19-22歳扶養親族への追加控除を推計して減算
 
+【合計の信頼区間】
+  05 の過去年検証の年ごとのぶれ（誤差率の標準偏差）から t 分布で作る（compute_yearly_ci）。
+  将来の伸び率の当て外れなど外挿の誤差を含むため、個人別の区間（split conformal）の合計より広い。
+  個人別CSVの個人ごとの区間は今までどおり（モデルの個人単位の誤差）なので、その合計とサマリーの区間は一致しない。
+  --no-trend のときも幅は同じ方法で作るが、平均の偏りを打ち消さないので区間の中心はずれたままになる。
+
 【import】
   data/05out_prediction_YYYY.csv      ← 05 の出力
   data/05out_forecast_backtest.csv    ← 05 の出力（過去年検証）
@@ -54,6 +60,7 @@ import argparse
 import os
 import numpy as np
 import pandas as pd
+from scipy import stats
 
 # data/ 等の相対パスはカレントディレクトリ基準のため、02_src_py/ の中から実行した場合は
 # プロジェクトルートへ戻す（2026-09-17追加）。ルートから実行した場合は何もしない。
@@ -64,7 +71,7 @@ if os.path.basename(os.getcwd()) == "02_src_py":
 from tax_reform import load_reforms, print_reform_summary
 from config import (
     PREPARED_DATA_PATH,
-    PREDICT_YEAR, TARGET_COL,
+    PREDICT_YEAR, TARGET_COL, CONFORMAL_COVERAGE,
 )
 
 BACKTEST_PATH = "data/05out_forecast_backtest.csv"   # 05 の過去年検証（トレンド補正の根拠）
@@ -96,6 +103,33 @@ def compute_trend_factor(bt_df: pd.DataFrame) -> tuple[float, str]:
     years    = f"{bt_df['予測年度'].min()}〜{bt_df['予測年度'].max()}"
     basis    = f"05方式の過去年検証 {years} 平均{err_col.removesuffix('_%')} {mean_err:+.2f}%（標準偏差 {std_err:.2f}%）"
     return factor, basis
+
+
+def compute_yearly_ci(bt_df: pd.DataFrame, total_oku: float, coverage: float):
+    """
+    05 の過去年検証の年ごとのぶれから、合計の信頼区間を作る。
+
+    区間 = 最終予測 ×（1 ± t × 標準偏差 × √(1 + 1/年数)）
+      - 標準偏差: 過去年検証の誤差率の標本標準偏差（将来の伸び率の当て外れなど、外挿の誤差を含む）
+      - t: 自由度（年数 − 1）の t 分布の係数。年数が少ないほど大きく、年数が増えると正規分布の 1.96 に近づく
+      - √(1 + 1/年数): トレンド補正に使う平均誤差率も同じ年数から推計しているため、そのぶれを含める分
+
+    個人別の区間（split conformal）はモデルの個人単位の誤差だけを表すので、合計の区間にはこちらを使う。
+    そのため、個人別の区間の合計とは一致しない。
+
+    Returns:
+        (下限_億円, 上限_億円, 方式の説明文)。年数が2年未満なら None
+    """
+    err_col = "人口補正後誤差率_%" if "人口補正後誤差率_%" in bt_df.columns else "誤差率_%"
+    errs    = bt_df[err_col].dropna()
+    n       = len(errs)
+    if n < 2:
+        return None
+    sd   = errs.std() / 100.0
+    k    = stats.t.ppf(0.5 + coverage / 2, n - 1)
+    half = k * sd * np.sqrt(1 + 1 / n)
+    method = f"過去年検証の年ごとのぶれ（t分布・{n}年、標準偏差 {sd * 100:.2f}%）"
+    return total_oku * (1 - half), total_oku * (1 + half), method
 
 
 # ─── 税制改正マクロ補正 ───────────────────────────────────────────────────────
@@ -254,16 +288,37 @@ def main():
 
     out_df.to_csv(out_path, index=False, encoding="utf-8-sig")
 
-    # 補正後の信頼区間: 個人別の補正後の下限・上限を合計する（05 と同じ計算方法）
+    # 合計の信頼区間: 過去年検証の年ごとのぶれから作る（compute_yearly_ci）。
+    # 個人別の区間（上で補正した列）はモデルの個人単位の誤差だけを表すので、その合計は参考として残す。
+    pct       = int(round(CONFORMAL_COVERAGE * 100))
     lower_col = next((c for c in out_df.columns if c.startswith("pred_tax_lower")), None)
     upper_col = next((c for c in out_df.columns if c.startswith("pred_tax_upper")), None)
-    ci_cols = {}
+    ref_ci    = None
     if lower_col and upper_col:
-        pct = lower_col.rsplit("_", 1)[-1]   # 例: pred_tax_lower_95 → "95"
+        ref_ci = (out_df[lower_col].sum() / 1e8, out_df[upper_col].sum() / 1e8)
+
+    yearly_ci = None
+    if os.path.exists(BACKTEST_PATH):
+        yearly_ci = compute_yearly_ci(pd.read_csv(BACKTEST_PATH, encoding="utf-8-sig"), total_final, CONFORMAL_COVERAGE)
+    if yearly_ci is not None:
+        ci_low, ci_high, ci_method = yearly_ci
+    elif ref_ci is not None:
+        ci_low, ci_high = ref_ci
+        ci_method = f"個人別の区間の合計（{BACKTEST_PATH} がないか、2年未満のため）"
+    else:
+        ci_low = ci_high = ci_method = None
+
+    ci_cols = {}
+    if ci_method is not None:
         ci_cols = {
-            f"CI下限_{pct}%_億円": round(out_df[lower_col].sum() / 1e8, 2),
-            f"CI上限_{pct}%_億円": round(out_df[upper_col].sum() / 1e8, 2),
+            f"CI下限_{pct}%_億円": round(ci_low, 2),
+            f"CI上限_{pct}%_億円": round(ci_high, 2),
+            "CI方式"            : ci_method,
         }
+        print(f"  {pct}%信頼区間          : {ci_low:.2f} 〜 {ci_high:.2f} 億円（{ci_method}）")
+    if ref_ci is not None:
+        ci_cols["参考_個人区間合計_下限_億円"] = round(ref_ci[0], 2)
+        ci_cols["参考_個人区間合計_上限_億円"] = round(ref_ci[1], 2)
     summary_rows = [{
         "予測年度"          : args.year,
         "補正前合計_億円"   : round(total_before_oku, 2),
