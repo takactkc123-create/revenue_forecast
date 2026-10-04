@@ -98,7 +98,8 @@ def print_metrics(label: str, y_true: np.ndarray, y_pred: np.ndarray) -> dict:
             "MAPE": mape_val, "WMAPE": wmape_val, "R2": r2_val}
 
 
-def show_feature_importance(model: lgb.LGBMRegressor, feature_cols: list, top_n: int = 10):
+def show_feature_importance(model: lgb.LGBMRegressor, feature_cols: list, top_n: int = 10, show: bool = False):
+    """特徴量重要度の上位を表示する。数値は常に表示し、show=True のときは棒グラフも描く（ノートブック用）。"""
     fi = pd.DataFrame({
         "特徴量": feature_cols,
         "重要度": model.feature_importances_,
@@ -108,6 +109,17 @@ def show_feature_importance(model: lgb.LGBMRegressor, feature_cols: list, top_n:
     for _, row in fi.iterrows():
         bar = "#" * int(row["重要度"] / max_imp * 20)
         print(f"  {row['特徴量']:35s} {bar} {row['重要度']:.4f}")
+
+    if show:
+        import matplotlib.pyplot as plt
+        fig, ax = plt.subplots(figsize=(8, 5))
+        ax.barh(fi["特徴量"], fi["重要度"], color="steelblue")
+        ax.invert_yaxis()  # 重要度1位が上に来るように反転
+        ax.set_xlabel("重要度")
+        ax.set_title(f"特徴量重要度 Top{top_n}")
+        plt.tight_layout()
+        plt.show()
+        plt.close()
 
 ## モデル予測に非課税フラグを適用して返す
 def _predict_with_nontaxable(
