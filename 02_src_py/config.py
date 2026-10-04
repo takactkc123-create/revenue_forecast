@@ -190,6 +190,7 @@ GENDER_RATIO  = [0.483, 0.517]
 APPLY_WAGE_GROWTH: bool = True
 
 # 給与収入の前年比成長率（連合「春季生活闘争 妥結結果」参考値）
+# ※ 01 のダミー生成専用（ダミーの世界の設定）。予測には使わない（予測用の外部の値は FORECAST_GROWTH_TABLE）
 # ※ 実績確定後は実際の数値で上書きすること
 SALARY_GROWTH_RATES: dict[int, float] = {
     2020: 1.000,
@@ -201,6 +202,7 @@ SALARY_GROWTH_RATES: dict[int, float] = {
 }
 
 # 公的年金収入の前年比改定率（厚生労働省「年金額の改定」参考値）
+# ※ 01 のダミー生成専用（ダミーの世界の設定）。予測には使わない（予測用の外部の値は FORECAST_GROWTH_TABLE）
 # ※ マクロ経済スライド・物価スライド等を反映。実績確定後は上書きすること
 PENSION_GROWTH_RATES: dict[int, float] = {
     2020: 1.000,
@@ -268,6 +270,22 @@ HOUSING_PROB_BY_AGE = {
 # 政府目標賃上げ率（春闘等）を参考に設定。
 WAGE_RATE_OVERRIDE = None   # 例: 0.025 → +2.5%固定。None → 実績から自動算出
 WAGE_RATE_DELTA    = 0.0    # 実績トレンドへの加算値（WAGE_RATE_OVERRIDE が None の場合のみ有効）
+
+# 伸び率の方式（給与・年金・事業所得の外挿）。CLI の --growth で一時的に上書きできる。
+#   "auto"  : 既定。実績の全員平均の直近2年の伸び率
+#   "table" : 下の FORECAST_GROWTH_TABLE の値（事業所得は自動）。給与・年金の値が欠けていればエラーで止める
+#   "none"  : 給与・年金・事業所得とも伸び率0%（外挿しない）。06 は自動のトレンド補正を掛けない
+# 直接指定（WAGE_RATE_OVERRIDE・--wage-rate・--pension-rate）と上乗せ（WAGE_RATE_DELTA・--wage-delta）はこれより優先する。
+# 直接指定・上乗せがあると過去年検証で偏りを測れないため、06 は自動のトレンド補正を掛けない。設計の理由は growth_input_plan.md。
+GROWTH_SOURCE = "auto"
+
+# 外部の伸び率の表（春闘の妥結率・年金改定率など）。キーは住民税の年度、値は「前年の所得の伸び率」（例: 2026年度 ← 2025年の春闘）。
+# "table" のときは、予測年度と過去年検証の各年度（2022〜2025）の値がすべて要る。実際の値と出典は運用で決めて書く（既定は空）。
+# 01 のダミー生成用の SALARY_GROWTH_RATES とは別物（同じ値を入れると、ダミーでは答えを入れて答え合わせをすることになる）。
+FORECAST_GROWTH_TABLE = {
+    "給与収入":          {2022: None, 2023: None, 2024: None, 2025: None, 2026: None},
+    "雑収入_公的年金等": {2022: None, 2023: None, 2024: None, 2025: None, 2026: None},
+}
 
 # ─── コンフォーマル予測（信頼区間）設定 ──────────────────────────────────────
 CONFORMAL_COVERAGE = 0.95   # 信頼水準（95%区間）

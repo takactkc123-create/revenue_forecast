@@ -6,6 +6,10 @@
   A. トレンド補正（wage_trend_factor）
      - 年度別合算予測の系統的な過大・過小傾向を緩和する乗率補正
      - 05 の過去年検証（05out_forecast_backtest.csv。05 と同じ方法で過去年を予測した誤差）から自動算出（オプションで上書き可）
+     - 自動の乗率は「その伸び率の方式の偏り」を打ち消す値なので、05 のサマリーの「伸び率の方式」と過去年検証の方式が一致し、
+       方式が auto か table のときだけ掛ける。none（伸ばさない）・伸び率の直接指定あり・方式の不一致のときは掛けない
+       （理由は growth_input_plan.md）。
+     - 全く補正しない: 05 --growth none（伸ばさない）＋ 06 --no-trend ＋ REFORMS の active=False（既定）
 
   B. 税制改正マクロ補正（tax_reform.py の REFORMS の macro_correction）
      - 扶養要件引き上げ（2026年〜）: 扶養控除新規取得者の増加分を推計して加算
@@ -20,6 +24,7 @@
 【import】
   data/05out_prediction_YYYY.csv      ← 05 の出力
   data/05out_forecast_backtest.csv    ← 05 の出力（過去年検証）
+  data/05out_prediction_summary_YYYY.csv ← 05 の出力（伸び率の方式を読む）
   data/03out_individual_prepared.csv  ← 03 の出力
 
 【export】
@@ -229,6 +234,17 @@ def main():
 
     print(f"補正前合計: {total_before_oku:.2f} 億円 ({n_persons:,}人)\n")
 
+    # 05 の伸び率の方式と、過去年検証の方式（古いファイルには列がないので auto とみなす）
+    # 自動の乗率は「その方式の偏り」を打ち消す値なので、方式が一致し auto か table のときだけ掛ける（理由は growth_input_plan.md）
+    sum05_path = f"data/05out_prediction_summary_{args.year}.csv"
+    sum05      = pd.read_csv(sum05_path, encoding="utf-8-sig").iloc[0] if os.path.exists(sum05_path) else pd.Series(dtype=object)
+    prod_mode  = str(sum05.get("伸び率の方式", "auto"))
+    direct     = str(sum05.get("伸び率の直接指定", "なし")) == "あり"
+    bt_df      = pd.read_csv(BACKTEST_PATH, encoding="utf-8-sig") if os.path.exists(BACKTEST_PATH) else None
+    bt_mode    = (str(bt_df["伸び率の方式"].iloc[0])
+                  if bt_df is not None and "伸び率の方式" in bt_df.columns and len(bt_df) else "auto")
+    mode_match = bt_mode == prod_mode and not direct
+
     # ── A. トレンド補正 ───────────────────────────────────────────────────────
     if args.no_trend:
         trend_factor = 1.0
@@ -238,14 +254,24 @@ def main():
         trend_factor = args.factor
         trend_basis  = "直接指定（--factor）"
         print(f"トレンド補正乗率（直接指定）: {trend_factor:.4f}")
-    elif os.path.exists(BACKTEST_PATH):
-        bt_df        = pd.read_csv(BACKTEST_PATH, encoding="utf-8-sig")
-        trend_factor, trend_basis = compute_trend_factor(bt_df)
-        print(f"トレンド補正（自動算出）: {trend_basis} → 乗率 {trend_factor:.4f}")
-    else:
+    elif bt_df is None:
         trend_factor = 1.0
         trend_basis  = f"{BACKTEST_PATH} なし → 補正なし"
         print(f"トレンド補正: {BACKTEST_PATH} なし → 乗率 1.0（補正なし）。先に 05_predict_2026.py を実行してください")
+    elif prod_mode == "none":
+        # 掛けると、伸ばさなかった分を乗率で足し戻すことになり「伸ばさない」の意味がなくなる
+        trend_factor = 1.0
+        trend_basis  = "伸ばさない方式（none）のため自動の乗率は掛けない"
+        print(f"トレンド補正: {trend_basis}")
+    elif not mode_match:
+        trend_factor = 1.0
+        reason = ("伸び率の直接指定があり、過去年検証で偏りを測れない" if direct
+                  else f"過去年検証の方式（{bt_mode}）が予測の方式（{prod_mode}）と違う。05 を --no-backtest なしで実行し直すこと")
+        trend_basis  = f"自動の乗率は掛けない（{reason}）"
+        print(f"トレンド補正: {trend_basis}")
+    else:
+        trend_factor, trend_basis = compute_trend_factor(bt_df)
+        print(f"トレンド補正（自動算出）: {trend_basis} → 乗率 {trend_factor:.4f}")
 
     pred_tax_after_trend = (pred_tax * trend_factor).round(0).astype(int)
     total_after_trend    = pred_tax_after_trend.sum() / 1e8
@@ -305,10 +331,12 @@ def main():
         ref_ci = (out_df[lower_col].sum() / 1e8, out_df[upper_col].sum() / 1e8)
 
     yearly_ci = None
-    if os.path.exists(BACKTEST_PATH):
-        yearly_ci = compute_yearly_ci(pd.read_csv(BACKTEST_PATH, encoding="utf-8-sig"), total_final, CONFORMAL_COVERAGE)
+    if bt_df is not None:
+        yearly_ci = compute_yearly_ci(bt_df, total_final, CONFORMAL_COVERAGE)
     if yearly_ci is not None:
         ci_low, ci_high, ci_method = yearly_ci
+        if not mode_match:   # 直接指定・方式の不一致: 別の方式で測ったぶれの流用なので目安
+            ci_method += f"。予測の方式（{prod_mode}{'・直接指定あり' if direct else ''}）と違う方式（{bt_mode}）のぶれを流用した目安"
     elif ref_ci is not None:
         ci_low, ci_high = ref_ci
         ci_method = f"個人別の区間の合計（{BACKTEST_PATH} がないか、2年未満のため）"

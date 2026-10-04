@@ -15,6 +15,14 @@ tax_reform.py の REFORMS（feature_correction）を適用して税制改正を�
   uv run python 05_predict_2026.py --wage-rate 0.025   # 給与上昇率を直接指定
   uv run python 05_predict_2026.py --wage-delta 0.013  # 実績トレンド + 1.3%
   uv run python 05_predict_2026.py --no-backtest       # 過去年検証を省略（約30秒短縮）
+  uv run python 05_predict_2026.py --growth table      # 伸び率を config の FORECAST_GROWTH_TABLE（春闘など）から取る
+  uv run python 05_predict_2026.py --growth none       # 伸ばさない（直近年の所得のまま。06 は自動のトレンド補正を掛けない）
+  uv run python 05_predict_2026.py --pension-rate 0.019  # 年金収入の伸び率を直接指定
+
+【伸び率の方式】（既定は config の GROWTH_SOURCE="auto"。設計の理由は growth_input_plan.md）
+  auto : 実績の全員平均の直近2年の伸び率 / table : FORECAST_GROWTH_TABLE の値（事業所得は自動）/ none : すべて0%
+  直接指定（--wage-rate・--pension-rate・WAGE_RATE_OVERRIDE）と上乗せ（--wage-delta）は方式より優先する。
+  過去年検証は本番と同じ方式で行う。直接指定・上乗せがあるときは auto で検証し、06 は自動のトレンド補正を掛けない。
 
 【import】
   data/03out_individual_prepared.csv  ← 03 の出力
@@ -57,6 +65,7 @@ from config import (
     PREDICT_YEAR, FEATURE_COLS, TARGET_COL,
     FURUSATO_PARAMS, HOUSING_PARAMS, CONFORMAL_COVERAGE,
     WAGE_RATE_OVERRIDE, WAGE_RATE_DELTA, LGBM_PARAMS, ALL_INCOME_COLS,
+    GROWTH_SOURCE, FORECAST_GROWTH_TABLE,
 )
 
 
@@ -117,46 +126,82 @@ def compute_conformal_interval(
     return q, scores
 
 
+# ─── 伸び率の決め方（給与・年金・事業所得） ─────────────────────────────────
+def decide_growth_rates(
+    df: pd.DataFrame,
+    target_year: int,
+    growth_source: str = "auto",
+    wage_rate: float | None = None,
+    wage_delta: float = 0.0,
+    pension_rate: float | None = None,
+) -> dict:
+    """
+    給与・年金・事業所得の伸び率を決める（estimate_next_year() に渡す）。設計の理由は growth_input_plan.md。
+
+    growth_source:
+      "auto"  : 実績の全員平均の直近2年の伸び率
+      "table" : config の FORECAST_GROWTH_TABLE の target_year の値（事業所得は自動）。
+                給与・年金の値が欠けていればエラー（欠けた年だけ自動にすると、過去年検証と本番で方式が混ざるため）
+      "none"  : すべて0%（外挿しない）
+    直接指定（wage_rate・pension_rate）と上乗せ（wage_delta）は growth_source より優先する。
+
+    Returns:
+        {"給与": {"col", "rate", "source"}, "年金": {...}, "事業所得": {...}}
+    """
+    if growth_source not in ("auto", "table", "none"):
+        raise ValueError(f"伸び率の方式は auto / table / none のいずれか（指定: {growth_source}）")
+    salary_col  = "給与収入" if "給与収入" in df.columns else "給与所得"
+    # 年金は収入（雑収入）に伸び率を掛け、所得は控除を引き直して計算する。雑収入の列がないデータは雑所得に掛ける
+    pension_col = "雑収入_公的年金等" if "雑収入_公的年金等" in df.columns else "雑所得_公的年金等"
+    items = {  # 名前: (伸び率を掛ける列, FORECAST_GROWTH_TABLE のキー。None は表を使わない)
+        "給与"    : (salary_col,        "給与収入"),
+        "年金"    : (pension_col,       "雑収入_公的年金等"),
+        "事業所得": ("事業所得_営業等", None),
+    }
+
+    def auto_rate(col: str) -> float:
+        if col not in df.columns:
+            return 0.0
+        yr_means = df.groupby("年度")[col].mean()
+        return float(yr_means.pct_change().dropna().tail(2).mean()) if len(yr_means) >= 2 else 0.0
+
+    rates = {}
+    for name, (col, table_key) in items.items():
+        if growth_source == "none":
+            rate, source = 0.0, "0%"
+        elif growth_source == "table" and table_key is not None:
+            value = FORECAST_GROWTH_TABLE.get(table_key, {}).get(target_year)
+            if value is None:
+                raise ValueError(f"config の FORECAST_GROWTH_TABLE「{table_key}」に {target_year}年度の値がありません（伸び率の方式 table）")
+            rate, source = float(value), "表"
+        else:
+            rate, source = auto_rate(col), "自動"
+        rates[name] = {"col": col, "rate": rate, "source": source}
+
+    if wage_rate is not None:
+        rates["給与"].update(rate=float(wage_rate), source="直接指定")
+    elif wage_delta != 0.0:
+        rates["給与"].update(rate=rates["給与"]["rate"] + wage_delta,
+                            source=f"{rates['給与']['source']}＋上乗せ{wage_delta * 100:+.2f}%")
+    if pension_rate is not None:
+        rates["年金"].update(rate=float(pension_rate), source="直接指定")
+    return rates
+
+
 # ─── 直近年ベースの翌年レコード推計 ──────────────────────────────────────────
 def estimate_next_year(
     df: pd.DataFrame,
     target_year: int,
-    wage_rate: float | None,
-    wage_delta: float,
+    rates: dict,
 ) -> pd.DataFrame:
+    """直近年のレコードをコピーし、rates（decide_growth_rates() の戻り値）の伸び率で所得を伸ばして翌年を推計する。"""
     last_year = df["年度"].max()
     base_df   = df[df["年度"] == last_year].copy()
 
-    has_gross        = "給与収入" in df.columns
-    salary_trend_col = "給与収入" if has_gross else "給与所得"
-
-    # 年金は収入（雑収入）に伸び率を掛け、所得は控除を引き直して計算する。雑所得の伸び率は雑収入の列がないデータ用
-    trend_cols = [salary_trend_col, "事業所得_営業等", "雑収入_公的年金等", "雑所得_公的年金等", "総所得金額等"]
-    yoy_rates  = {}
-    for col in trend_cols:
-        if col in df.columns:
-            yr_means = df.groupby("年度")[col].mean()
-            yoy_rates[col] = (
-                float(yr_means.pct_change().dropna().tail(2).mean())
-                if len(yr_means) >= 2 else 0.0
-            )
-
-    base_wage_rate = yoy_rates.get(salary_trend_col, 0.0)
-    if wage_rate is not None:
-        eff_wage_rate = wage_rate
-        print(f"  給与収入上昇率（直接指定）: {eff_wage_rate*100:+.2f}%")
-        print(f"  （実績トレンド参考値: {base_wage_rate*100:+.2f}%）")
-    elif wage_delta != 0.0:
-        eff_wage_rate = base_wage_rate + wage_delta
-        print(f"  給与収入上昇率: 実績 {base_wage_rate*100:+.2f}% + 差分 {wage_delta*100:+.2f}% = {eff_wage_rate*100:+.2f}%")
-    else:
-        eff_wage_rate = base_wage_rate
-        print(f"  給与収入上昇率（実績トレンド直近2年平均）: {eff_wage_rate*100:+.2f}%")
-
-    pension_col = "雑収入_公的年金等" if "雑収入_公的年金等" in df.columns else "雑所得_公的年金等"   # 実際に伸び率を掛ける列
-    for col in ["事業所得_営業等", pension_col, "総所得金額等"]:
-        if col in yoy_rates:
-            print(f"  {col}: {yoy_rates[col]*100:+.2f}%")
+    has_gross = "給与収入" in df.columns
+    for name, r in rates.items():
+        print(f"  {name}（{r['col']}）の伸び率: {r['rate'] * 100:+.2f}%（{r['source']}）")
+    eff_wage_rate = rates["給与"]["rate"]
 
     rng     = np.random.default_rng(42)
     next_df = base_df.copy()
@@ -184,7 +229,7 @@ def estimate_next_year(
     # 事業所得・年金収入（gross）にトレンドを適用。年金所得は収入から再計算
     for col in ["事業所得_営業等", "雑収入_公的年金等"]:
         if col in next_df.columns:
-            rate  = yoy_rates.get(col, 0.0)
+            rate  = rates["事業所得"]["rate"] if col == "事業所得_営業等" else rates["年金"]["rate"]
             noise = rng.normal(1.0, 0.02, size=len(next_df))
             next_df[col] = (next_df[col] * (1 + rate) * noise).clip(0).round(0).astype(int)
     if "雑収入_公的年金等" in next_df.columns:
@@ -193,7 +238,7 @@ def estimate_next_year(
             next_df["雑収入_公的年金等"].values, next_df["年齢"].values
         ).round(0).astype(int)
     elif "雑所得_公的年金等" in next_df.columns:
-        rate  = yoy_rates.get("雑所得_公的年金等", 0.0)
+        rate  = rates["年金"]["rate"]
         noise = rng.normal(1.0, 0.02, size=len(next_df))
         next_df["雑所得_公的年金等"] = (next_df["雑所得_公的年金等"] * (1 + rate) * noise).clip(0).round(0).astype(int)
 
@@ -255,6 +300,8 @@ def run_forecast_backtest(
     df_prep: pd.DataFrame,
     feature_cols: list,
     lgbm_params: dict,
+    growth_source: str = "auto",
+    method_label: str | None = None,
     min_train: int = 2,
 ) -> pd.DataFrame:
     """
@@ -263,8 +310,11 @@ def run_forecast_backtest(
     04 の検証は検証年の本当の特徴量で予測するため、モデル自体の誤差しか測れない。
     本番の予測では estimate_next_year() で特徴量を推計するので、その誤差も含めてここで測る。
     各年 t について、t より前の年だけで学習し、estimate_next_year(t より前, t) の特徴量で予測する。
-    賃金上昇率は実績のトレンドを使う（--wage-rate / --wage-delta は将来についての判断なので、ここでは使わない）。
+    伸び率は本番と同じ方式（growth_source）で決める。トレンド補正の乗率は「その方式の偏り」を打ち消す値なので、
+    方式をそろえないと補正がずれる。直接指定・上乗せは1つの値で過去年を予測できないので使わない
+    （その場合、main は auto で検証し、method_label にその旨を書く）。
     """
+    method_label = method_label or growth_source
     years = sorted(df_prep["年度"].unique().tolist())
     rows  = []
     for t in [y for y in years if len([p for p in years if p < y]) >= min_train]:
@@ -275,7 +325,7 @@ def run_forecast_backtest(
 
         # estimate_next_year() と補正ルールの途中経過は、4年分だと長いので表示しない
         with contextlib.redirect_stdout(io.StringIO()):
-            nx = estimate_next_year(hist, t, wage_rate=None, wage_delta=0.0)
+            nx = estimate_next_year(hist, t, decide_growth_rates(hist, t, growth_source))
             nx = apply_reforms(nx, load_reforms(target_year=t, reform_type="feature_correction"))
         pred = np.maximum(m.predict(nx[feature_cols].fillna(0).values), get_min_tax(t))
         pred = np.where(non_taxable_flag_from_df(nx), 0, pred)
@@ -290,6 +340,7 @@ def run_forecast_backtest(
             "人数_実績"        : len(act),
             "人数_予測"        : len(nx),
             "1人あたり誤差率_%": round((pred.mean() - act.mean()) / act.mean() * 100, 2),
+            "伸び率の方式"     : method_label,
         })
     return pd.DataFrame(rows)
 
@@ -307,6 +358,10 @@ def main():
                           help="実績トレンドへの加算値（例: 0.013 → +1.3%%）")
     parser.add_argument("--no-backtest", action="store_true",
                         help="過去年検証（06 のトレンド補正の根拠）を省略する（約30秒短縮）")
+    parser.add_argument("--growth", choices=["auto", "table", "none"], default=None,
+                        help=f"伸び率の方式（省略時は config の GROWTH_SOURCE＝{GROWTH_SOURCE}）")
+    parser.add_argument("--pension-rate", type=float, default=None,
+                        help="年金収入の伸び率を直接指定（例: 0.019 → +1.9%%）")
     args = parser.parse_args()
 
     print(f"=== 05: {args.year}年度 予測 ===\n")
@@ -347,6 +402,13 @@ def main():
     )
     print(f"  {CONFORMAL_COVERAGE*100:.0f}%区間幅: ±{q_cov/1e4:.1f}万円/人\n")
 
+    # 伸び率の方式と直接指定（直接指定・上乗せがあると、過去年検証でその偏りを測れない）
+    growth_source = args.growth or GROWTH_SOURCE
+    wage_rate     = args.wage_rate if args.wage_rate is not None else WAGE_RATE_OVERRIDE
+    wage_delta    = args.wage_delta
+    direct        = wage_rate is not None or wage_delta != 0.0 or args.pension_rate is not None
+    growth        = None   # --file のときは外挿しないので None のまま
+
     # 予測データ準備
     if args.file:
         print(f"実データ読込: {args.file}")
@@ -359,13 +421,9 @@ def main():
         total_pre_oku = pred_tax.sum() / 1e8
         total_oku     = total_pre_oku
     else:
-        wage_rate  = args.wage_rate if args.wage_rate is not None else WAGE_RATE_OVERRIDE
-        wage_delta = args.wage_delta
-
-        print("自動推計モード（直近年を外挿）")
-        pred_df = estimate_next_year(
-            df_prep, args.year, wage_rate=wage_rate, wage_delta=wage_delta
-        )
+        print(f"自動推計モード（直近年を外挿。伸び率の方式: {growth_source}{'、直接指定あり' if direct else ''}）")
+        growth  = decide_growth_rates(df_prep, args.year, growth_source, wage_rate, wage_delta, args.pension_rate)
+        pred_df = estimate_next_year(df_prep, args.year, growth)
 
         # 補正前の予測（税制改正なしベースライン）
         X_pre         = pred_df[feature_cols].fillna(0).values
@@ -446,6 +504,14 @@ def main():
     sum_path = f"data/05out_prediction_summary_{args.year}.csv"
 
     out_df.to_csv(out_path, index=False, encoding="utf-8-sig")
+    # 使った伸び率の方式と値（06 はこの列を見て、自動のトレンド補正を掛けるかを決める）
+    growth_cols = {
+        "伸び率の方式"    : "file（実データ）" if args.file else growth_source,
+        "伸び率の直接指定": "あり" if direct else "なし",
+    }
+    for name, r in (growth or {}).items():
+        growth_cols[f"{name}の伸び率_%"]   = round(r["rate"] * 100, 2)
+        growth_cols[f"{name}の伸び率の出所"] = r["source"]
     pd.DataFrame([{
         "予測年度"        : args.year,
         "予測合計_億円"   : round(total_oku, 2),
@@ -458,6 +524,7 @@ def main():
         "課税者数"        : n_taxable,  # 2026-09-09追加: 非課税者を除いた課税者数
         "適用補正数"      : len(feature_reforms),
         "適用補正名"      : "|".join(r["name"] for r in feature_reforms) if feature_reforms else "なし",
+        **growth_cols,
     }]).to_csv(sum_path, index=False, encoding="utf-8-sig")
 
     print(f"\n→ {out_path} に個人別予測を保存")
@@ -468,7 +535,10 @@ def main():
         print("\n過去年検証: スキップ（--no-backtest）。06 は前回の結果ファイルを使う")
     else:
         print("\n── 過去年検証（05 と同じ方法で過去年を予測し、実績と比べる） ──")
-        bt_df = run_forecast_backtest(df_prep, feature_cols, config["lgbm_params"])
+        # 本番と同じ方式で検証する。直接指定・上乗せは過去年に当てはめられないので auto で検証し、その旨を記録する
+        bt_source = "auto" if direct else growth_source
+        bt_label  = "auto（直接指定は検証不可）" if direct else growth_source
+        bt_df = run_forecast_backtest(df_prep, feature_cols, config["lgbm_params"], bt_source, bt_label)
         bt_df.to_csv(BACKTEST_PATH, index=False, encoding="utf-8-sig")
         print(bt_df.to_string(index=False))
         print(f"  平均誤差率 {bt_df['誤差率_%'].mean():+.2f}%  標準偏差 {bt_df['誤差率_%'].std():.2f}%")
