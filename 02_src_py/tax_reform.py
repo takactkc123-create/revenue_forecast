@@ -1,35 +1,31 @@
 """
 tax_reform.py
 =============
-税制改正補正モジュール（04_model_train / 05_predict_2026 / 06_trend_correction から呼び出される共通モジュール）
+税制改正モジュール（01〜06 から呼び出される共通モジュール）。法律で決まる計算と、税制改正の補正ルールを持つ。
 
-tax_reform_config.json から補正ルールを読み込み、
-学習ラベル補正（label_correction）および予測特徴量補正（feature_correction）を適用する。
+【構成】
+  - compute_* 関数 : 年度で決まる恒久的な計算式（給与所得控除・公的年金等控除・基礎控除・非課税判定 など）
+  - REFORMS（末尾）: 期間限定・単年の補正ルール。active で有効/無効を切り替える（ここが唯一の正）
+  - 記録（スナップショット）: REFORMS の内容を models/tax_reform_snapshot.json に書き出す（閲覧専用。パイプラインは読まない）
 
 【使い方】
   from tax_reform import load_reforms, apply_reforms, print_reform_summary
 
-  # 04_model_train.py: 学習ラベル補正（全訓練期間を対象に読み込む）
-  reforms = load_reforms(path, target_year=2025, reform_type="label_correction")
+  # 04_model_train.py: 学習ラベル補正
+  reforms = load_reforms(target_year=2025, reform_type="label_correction")
   df_corrected = apply_reforms(df.copy(), reforms)
 
   # 05_predict_2026.py: 翌年特徴量補正
-  reforms = load_reforms(path, target_year=2026, reform_type="feature_correction")
+  reforms = load_reforms(target_year=2026, reform_type="feature_correction")
   df_reformed  = apply_reforms(df.copy(), reforms)
 
-【JSONの項目（tax_reform_config.json の reforms の1ブロック＝1つの改正）】
-  name           : 補正の識別子。REFORM_REGISTRY のキーと対応
-  effective_year : 施行年度
-  one_time       : true=その年のみ / false=以降継続（補正関数内で制御）
-  active         : false なら読み込みから除外（未実装・データ不足など）
-  reform_type    : label_correction / feature_correction / macro_correction
-  params         : 補正関数に渡すパラメータ（例: {"amount_per_person": 10000}）
-  memo           : 人間向け備考（コード上は不使用）
+  # REFORMS を変えたら、記録を更新して現在の設定を確認する
+  uv run python 02_src_py/tax_reform.py
 
 【補正追加の手順】
-  1. tax_reform_config.json の reforms に1ブロック追加（name, params 等）
-  2. 計算式が新規なら _apply_<name> 関数を実装
-  3. REFORM_REGISTRY にエントリを追加
+  1. 新しい計算が必要なら _apply_<name> 関数を実装（06 が集計で扱うものは不要）
+  2. 末尾の REFORMS に辞書を1つ追加（func に関数を直接指定）
+  3. uv run python 02_src_py/tax_reform.py を実行して記録を更新
 """
 
 import json
@@ -40,10 +36,9 @@ from config import (
     NON_TAXABLE_PER_PERSON,
     NON_TAXABLE_FLAT,
     NON_TAXABLE_FAMILY_ADD,
+    TARGET_COL,
+    TAX_REFORM_SNAPSHOT_PATH,
 )
-
-TARGET_COL         = "年税額"
-REFORM_CONFIG_PATH = "02_src_py/tax_reform_config.json"
 
 
 # ─────────────────────────────────────────────
@@ -278,30 +273,20 @@ def compute_basic_deduction(income_total: np.ndarray) -> np.ndarray:
 
 
 # ─────────────────────────────────────────────
-# 設定ファイル（JSON）の読み込み
+# 補正ルールの読み込み・適用（ルール本体は末尾の REFORMS）
 # ─────────────────────────────────────────────
-def load_reforms(config_path: str, target_year: int, reform_type: str = None) -> list:
+def load_reforms(target_year: int, reform_type: str = None) -> list:
     """
-    対象年度（target_year）以前に施行された補正ルールを JSON から読み込む。
+    REFORMS から、対象年度（target_year）以前に施行された有効な補正ルールを取り出す。
 
-    effective_year <= target_year かつ active=true の改正が対象。
-    補正関数が年度列で年次フィルタを行うため、
-    一括読み込みした後に apply_reforms に渡せばよい。
-
-    設定ファイルが無い場合は警告を表示して空リストを返す（＝補正なしとして処理を続ける）。
+    effective_year <= target_year かつ active=True の改正が対象。
+    補正関数が年度列で年次フィルタを行うため、一括で取り出して apply_reforms に渡せばよい。
 
     Returns:
-        [{"name": str, "params": dict}, ...]  name・施行年度の順に並べた適用順リスト
+        [{"name": str, "func": 関数 or None, "params": dict}, ...]  name・施行年度の順に並べた適用順リスト
     """
-    if not os.path.exists(config_path):
-        print(f"  ⚠ 税制改正の設定ファイルがありません（{config_path}）→ 補正なしで続行")
-        return []
-
-    with open(config_path, encoding="utf-8") as f:
-        cfg = json.load(f)
-
     reforms = []
-    for r in sorted(cfg["reforms"], key=lambda r: (r["name"], r["effective_year"])):
+    for r in sorted(REFORMS, key=lambda r: (r["name"], r["effective_year"])):
         if not r["active"] or r["effective_year"] > target_year:
             continue
         if reform_type and r["reform_type"] != reform_type:
@@ -309,8 +294,7 @@ def load_reforms(config_path: str, target_year: int, reform_type: str = None) ->
         params = dict(r["params"])
         params["_effective_year"] = int(r["effective_year"])
         params["_one_time"]       = bool(r["one_time"])
-        reforms.append({"name": r["name"], "params": params})
-
+        reforms.append({"name": r["name"], "func": r["func"], "params": params})
     return reforms
 
 
@@ -322,11 +306,10 @@ def apply_reforms(df: pd.DataFrame, reforms: list) -> pd.DataFrame:
         補正済み DataFrame（元 df は変更しない）
     """
     for r in reforms:
-        name = r["name"]
-        if name in REFORM_REGISTRY:
-            df = REFORM_REGISTRY[name](df, r["params"])
-        else:
-            print(f"  ⚠ 未実装の改正: {name}（REFORM_REGISTRY に追加してください）")
+        if r["func"] is None:
+            print(f"  ⚠ 補正関数が未設定: {r['name']}（集計で扱う補正は 06 が処理する。REFORMS の func を確認）")
+            continue
+        df = r["func"](df, r["params"])
     return df
 
 
@@ -344,6 +327,46 @@ def print_reform_summary(reforms: list, label: str = ""):
 
 
 # ─────────────────────────────────────────────
+# 補正ルールの記録（スナップショット）: 閲覧専用。パイプラインはこのファイルを読まない
+# ─────────────────────────────────────────────
+def reforms_snapshot() -> dict:
+    """REFORMS を JSON に書ける形に変換する（関数は名前の文字列にする）。"""
+    return {
+        "_注意": [
+            "自動生成ファイル。編集しても計算には反映されない（パイプラインはこのファイルを読まない）。",
+            "設定の変更は 02_src_py/tax_reform.py の REFORMS で行い、uv run python 02_src_py/tax_reform.py を実行して上書きする。",
+        ],
+        "generated_by": "02_src_py/tax_reform.py",
+        "reforms": [
+            {k: (v.__name__ if callable(v) else v) for k, v in r.items()}
+            for r in REFORMS
+        ],
+    }
+
+
+def write_reform_snapshot(path: str = TAX_REFORM_SNAPSHOT_PATH) -> None:
+    """REFORMS の内容を JSON に書き出す（生成日時は入れない＝設定が変わったときだけ差分が出る）。"""
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(reforms_snapshot(), f, ensure_ascii=False, indent=2)
+        f.write("\n")
+
+
+def check_reform_snapshot(path: str = TAX_REFORM_SNAPSHOT_PATH) -> bool:
+    """記録が REFORMS と一致するか確認し、古ければ警告する（自動では上書きしない）。"""
+    if not os.path.exists(path):
+        print(f"  ⚠ 補正ルールの記録がありません（{path}）。uv run python 02_src_py/tax_reform.py を実行してください")
+        return False
+    with open(path, encoding="utf-8") as f:
+        saved = json.load(f)
+    if saved != json.loads(json.dumps(reforms_snapshot(), ensure_ascii=False)):
+        print(f"  ⚠ 補正ルールの記録（{path}）が tax_reform.py の REFORMS と一致しません。"
+              "uv run python 02_src_py/tax_reform.py を実行して更新してください（計算は REFORMS を使うため結果には影響しない）")
+        return False
+    return True
+
+
+# ─────────────────────────────────────────────
 # 各補正関数の実装
 # ─────────────────────────────────────────────
 def _apply_teigaku_reduction(df: pd.DataFrame, params: dict) -> pd.DataFrame:
@@ -356,7 +379,7 @@ def _apply_teigaku_reduction(df: pd.DataFrame, params: dict) -> pd.DataFrame:
     扶養分（1人1万円）は個人データから正確に算出困難なため本人分のみ補正。
 
     【現在の運用方針】
-    tax_reform_config.json で active=false に設定済み（この関数は呼ばれない）。
+    REFORMS で active=False に設定済み（この関数は呼ばれない）。
     実データ投入時に 2024年の税額を「定額減税前の水準 (+1万円)」に加工することで
     モデルパイプライン外で対応する方針に変更。
     ダミーデータには定額減税効果が未実装のため、active=True にすると 2024年ラベルが
@@ -461,36 +484,63 @@ def _apply_salary_deduction_floor(df: pd.DataFrame, params: dict) -> pd.DataFram
     return df
 
 
-def _apply_dependent_income_limit(df: pd.DataFrame, params: dict) -> pd.DataFrame:
-    """
-    扶養要件引き上げ（2026年〜）: 扶養可能所得上限 48万→58万円。
-
-    個人データに家族関係情報がないため個人レベル補正は不可。
-    06_trend_correction.py の dependent_income_limit で集計レベル補正を実施。
-    """
-    print(f"    扶養要件引き上げ ({params['_effective_year']}年〜): スキップ → 06 で集計補正")
-    return df
-
-
-def _apply_special_dependent_allowance(df: pd.DataFrame, params: dict) -> pd.DataFrame:
-    """
-    特定親族特別控除（2026年〜）: 19-22歳扶養親族への段階的控除。
-
-    個人データに扶養親族の年齢情報がないため個人レベル補正は不可。
-    06_trend_correction.py の special_dependent_allowance で集計レベル補正を実施。
-    """
-    age_from = int(params.get("age_from", 19))
-    age_to   = int(params.get("age_to",   22))
-    print(f"    特定親族特別控除 ({age_from}-{age_to}歳, {params['_effective_year']}年〜): スキップ → 06 で集計補正")
-    return df
+# ─────────────────────────────────────────────
+# 税制改正の補正ルール（ここが唯一の正。active で有効/無効を切り替える）
+# ─────────────────────────────────────────────
+# 1つの改正＝1つの辞書。変更したら uv run python 02_src_py/tax_reform.py を実行して記録（スナップショット）を更新する。
+#   name           : 補正の識別子（表示と、06 での判定に使う）
+#   func           : 補正関数（関数を直接指定するため、名前のずれが起きない）。06 が集計で扱うものは None
+#   reform_type    : label_correction（04で学習ラベル）/ feature_correction（05で特徴量）/ macro_correction（06で集計値）
+#   effective_year : 施行年度（この年度以降が対象）
+#   one_time       : True=その年のみ / False=以降継続（補正関数内で制御）
+#   active         : False なら読み込まれない
+#   params         : 補正関数に渡す値
+#   memo           : 備考（プログラムは使わない）
+# ※ 年度で決まる恒久的な計算式（給与所得控除の最低額など）は compute_* 関数側に書き、ここには書かない（二重適用になるため）
+REFORMS: list = [
+    {
+        "name": "teigaku_reduction",
+        "func": _apply_teigaku_reduction,
+        "reform_type": "label_correction",
+        "effective_year": 2024,
+        "one_time": True,
+        "active": False,
+        "params": {"amount_per_person": 10_000},
+        "memo": "実データ投入時に定額減税前税額へ加工済みとするため active=False（モデル内補正は不要）",
+    },
+    {
+        "name": "dependent_income_limit",
+        "func": None,
+        "reform_type": "macro_correction",
+        "effective_year": 2026,
+        "one_time": False,
+        "active": False,
+        "params": {"old_limit": 480_000, "new_limit": 580_000},
+        "memo": "扶養要件引き上げ（扶養可能所得 48万→58万）。家族関係データが不足するため無効。有効にすると06で集計補正する",
+    },
+    {
+        "name": "special_dependent_allowance",
+        "func": None,
+        "reform_type": "macro_correction",
+        "effective_year": 2026,
+        "one_time": False,
+        "active": False,
+        "params": {"age_from": 19, "age_to": 22},
+        "memo": "特定親族特別控除（19〜22歳の扶養親族）。扶養親族の年齢データが不足するため無効。有効にすると06で集計補正する",
+    },
+]
 
 
 # ─────────────────────────────────────────────
-# 補正レジストリ（名前 → 関数）
+# 単独で実行したとき: 記録を更新し、現在の設定を一覧表示する
+#   uv run python 02_src_py/tax_reform.py
 # ─────────────────────────────────────────────
-REFORM_REGISTRY: dict = {
-    "teigaku_reduction"          : _apply_teigaku_reduction,
-    "salary_deduction_floor"     : _apply_salary_deduction_floor,
-    "dependent_income_limit"     : _apply_dependent_income_limit,
-    "special_dependent_allowance": _apply_special_dependent_allowance,
-}
+if __name__ == "__main__":
+    if os.path.basename(os.getcwd()) == "02_src_py":   # 02_src_py/ の中から実行した場合はルートへ戻す
+        os.chdir("..")
+    write_reform_snapshot()
+    print(f"→ {TAX_REFORM_SNAPSHOT_PATH} を更新しました\n")
+    print(f"{'name':30s} {'reform_type':18s} {'施行':>5s} {'単年':>4s} {'有効':>4s}  params")
+    for r in REFORMS:
+        print(f"{r['name']:30s} {r['reform_type']:18s} {r['effective_year']:>5d} "
+              f"{'○' if r['one_time'] else '':>4s} {'○' if r['active'] else '×':>4s}  {r['params']}")

@@ -36,7 +36,7 @@ from matplotlib.patches import Patch
 if os.path.basename(os.getcwd()) == "02_src_py":
     os.chdir("..")
 
-from config import PREDICT_YEAR
+from config import PREDICT_YEAR, MODEL_CONFIG_PATH
 
 matplotlib.rcParams["font.family"] = ["MS Gothic", "Hiragino Sans", "DejaVu Sans"]
 matplotlib.rcParams["axes.unicode_minus"] = False
@@ -45,7 +45,7 @@ RESULTS_DIR  = "05_results"
 YEARLY_PATH  = "data/04out_yearly_result.csv"
 VAL_PATH     = "data/04out_val_result.csv"
 WF_PATH      = "data/04out_walkforward_result.csv"
-MC_PATH      = "models/model_config.json"
+MC_PATH      = MODEL_CONFIG_PATH
 
 # 2026-09-12変更: 旧「80以上」を 80-84 / 85-89 / 90over の3区分に分割（config.py と対応）
 AGE_ORDER = [
@@ -464,7 +464,7 @@ def fig7_walkforward_report(yearly_df: pd.DataFrame, val_df: pd.DataFrame | None
 
     wf_df = pd.read_csv(WF_PATH, encoding="utf-8-sig")
 
-    # model_config.json から検証モードと最終訓練年度を取得
+    # 04out_model_config.json から検証モードと最終訓練年度を取得
     mode              = "不明"
     final_train_label = ""
     if os.path.exists(MC_PATH):

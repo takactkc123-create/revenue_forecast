@@ -7,7 +7,7 @@
      - 年度別合算予測の系統的な過大・過小傾向を緩和する乗率補正
      - 04 の 04out_yearly_result.csv に基づいて自動算出（オプションで上書き可）
 
-  B. 税制改正マクロ補正（tax_reform_config.json の macro_correction）
+  B. 税制改正マクロ補正（tax_reform.py の REFORMS の macro_correction）
      - 扶養要件引き上げ（2026年〜）: 扶養控除新規取得者の増加分を推計して加算
      - 特定親族特別控除（2026年〜）: 19-22歳扶養親族への追加控除を推計して減算
 
@@ -44,7 +44,7 @@
   ※ 引数なしで実行したときの自動算出（compute_trend_factor）は、04 の訓練年の
     予測誤差＝モデルの系統的なズレを打ち消すものであり、人口動態は一切見ていない。
     訓練年の誤差が小さいと乗率は 1.0 になり「補正なし」となる点に注意。
-  ※ tax_reform_config.json の macro_correction に人口減少の行を追加しても効かない
+  ※ tax_reform.py の REFORMS の macro_correction に人口減少の行を追加しても効かない
     （apply_macro_reforms が扱うのは dependent_income_limit /
      special_dependent_allowance の2つのみ。それ以外は「未実装」警告を出して無視する）。
 """
@@ -62,7 +62,7 @@ if os.path.basename(os.getcwd()) == "02_src_py":
 
 from tax_reform import load_reforms, print_reform_summary
 from config import (
-    PREPARED_DATA_PATH, REFORM_CONFIG_PATH,
+    PREPARED_DATA_PATH,
     PREDICT_YEAR, TARGET_COL,
 )
 
@@ -92,7 +92,7 @@ def compute_trend_factor(yearly_df: pd.DataFrame) -> float:
 # ─── 税制改正マクロ補正 ───────────────────────────────────────────────────────
     """
     個人レベルで反映できない税制改正を集計レベルで補正する。
-    tax_reform_config.json の macro_correction タイプを読み込んで適用する。
+    tax_reform.py の REFORMS の macro_correction タイプを読み込んで適用する。
 
     Returns:
         (補正後合計_億円, 補正明細リスト)
@@ -105,17 +105,17 @@ def apply_macro_reforms(
     df_prep: pd.DataFrame,
 ) -> tuple[float, list]:
     reforms = load_reforms(
-        REFORM_CONFIG_PATH, target_year=target_year, reform_type="macro_correction"
+        target_year=target_year, reform_type="macro_correction"
     )
     print_reform_summary(reforms, label="macro_correction")
 
     adjustments = []
     total = pred_total_oku
 
-    # 【有効にする場合】02_src_py/tax_reform_config.json で以下を設定する（このファイルの修正は不要）。
-    # dependent_income_limit / special_dependent_allowance は reform_type=macro_correction・active=false で登録済み。
+    # 【有効にする場合】02_src_py/tax_reform.py の REFORMS で以下を設定する（このファイルの修正は不要）。
+    # dependent_income_limit / special_dependent_allowance は reform_type=macro_correction・active=False で登録済み。
     #
-    #   1. active を true に変更
+    #   1. active を True に変更（変更後は uv run python 02_src_py/tax_reform.py で記録を更新）
     #   2. 必要に応じて params に下記 if/elif が参照するキーを追加する（未設定なら既定値で計算される）
     #        dependent_income_limit     : new_dependent_rate（既定0.002）, deduction_per_person（既定330000）
     #        special_dependent_allowance: target_rate（既定0.003）, deduction_per_person（既定450000）

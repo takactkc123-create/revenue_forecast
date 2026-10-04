@@ -1,17 +1,17 @@
 {
-  "_説明": [
-    "税制改正の補正ルール。04〜06 が tax_reform.load_reforms() で読み込む。",
-    "active=false の改正は読み込まれない。effective_year 以降の年度が対象。",
-    "reform_type: label_correction=04で学習ラベルを補正 / feature_correction=05で特徴量を補正 / macro_correction=06で集計値を補正",
-    "name は tax_reform.py の REFORM_REGISTRY のキーと対応させること。"
+  "_注意": [
+    "自動生成ファイル。編集しても計算には反映されない（パイプラインはこのファイルを読まない）。",
+    "設定の変更は 02_src_py/tax_reform.py の REFORMS で行い、uv run python 02_src_py/tax_reform.py を実行して上書きする。"
   ],
+  "generated_by": "02_src_py/tax_reform.py",
   "reforms": [
     {
       "name": "teigaku_reduction",
+      "func": "_apply_teigaku_reduction",
+      "reform_type": "label_correction",
       "effective_year": 2024,
       "one_time": true,
       "active": false,
-      "reform_type": "label_correction",
       "params": {
         "amount_per_person": 10000
       },
@@ -19,10 +19,11 @@
     },
     {
       "name": "dependent_income_limit",
+      "func": null,
+      "reform_type": "macro_correction",
       "effective_year": 2026,
       "one_time": false,
       "active": false,
-      "reform_type": "macro_correction",
       "params": {
         "old_limit": 480000,
         "new_limit": 580000
@@ -31,10 +32,11 @@
     },
     {
       "name": "special_dependent_allowance",
+      "func": null,
+      "reform_type": "macro_correction",
       "effective_year": 2026,
       "one_time": false,
       "active": false,
-      "reform_type": "macro_correction",
       "params": {
         "age_from": 19,
         "age_to": 22

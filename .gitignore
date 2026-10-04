@@ -1,7 +1,8 @@
 data/
 
 models/*
-!models/model_config.json
+!models/04out_model_config.json
+!models/tax_reform_snapshot.json
 
 __pycache__/
 *.pyc

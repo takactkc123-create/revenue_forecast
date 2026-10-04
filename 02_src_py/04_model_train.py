@@ -4,7 +4,7 @@
 個人住民税予測モデル - Step4: モデル学習・時系列検証
 
 LightGBM で個人別住民税額を学習し、時系列ホールドアウト（TEST_YEAR）で精度を検証する。
-tax_reform_config.json の label_correction を適用してから学習する。
+tax_reform.py の REFORMS（label_correction）を適用してから学習する。
 
 【実行方法】
   ※ 02_src_py/ の中で実行する例。プロジェクトルートからは uv run python 02_src_py/04_model_train.py でも実行できる。
@@ -20,11 +20,11 @@ tax_reform_config.json の label_correction を適用してから学習する。
 【import】
   data/03out_individual_prepared.csv  ← 03_feature_eng.py の出力
   config.py                           ← モデル設定（特徴量・パラメータ・学習年・テスト年）
-  tax_reform_config.json               ← 税制改正設定ファイル
+  tax_reform.py（REFORMS）               ← 税制改正の補正ルール
 
 【export】
-  models/lgbm_model.txt              ← LightGBM モデルファイル
-  models/model_config.json           ← 特徴量・パラメータ設定（05 が参照）
+  models/04out_lgbm_model.txt              ← LightGBM モデルファイル
+  models/04out_model_config.json           ← 特徴量・パラメータ設定（05 が参照）
   data/04out_val_result.csv          ← 個人別予測 vs 実測（TEST_YEAR の out-of-sample）
   data/04out_yearly_result.csv       ← 年度別合算精度
   data/04out_walkforward_result.csv  ← walkforward / retrain_all モード時のみ出力
@@ -49,10 +49,10 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 if os.path.basename(os.getcwd()) == "02_src_py":
     os.chdir("..")
 
-from tax_reform import load_reforms, apply_reforms, print_reform_summary, compute_non_taxable_flag
+from tax_reform import load_reforms, apply_reforms, print_reform_summary, compute_non_taxable_flag, check_reform_snapshot
 from config import (
     PREPARED_DATA_PATH, MODEL_DIR, MODEL_PATH, MODEL_CONFIG_PATH,
-    REFORM_CONFIG_PATH, TRAIN_YEARS, TEST_YEAR,
+    TAX_REFORM_SNAPSHOT_PATH, TRAIN_YEARS, TEST_YEAR,
     FEATURE_COLS, TARGET_COL, LGBM_PARAMS, MIN_TAX,
     VALIDATION_MODE, WF_MIN_TRAIN_YEARS,
 )
@@ -249,11 +249,11 @@ def main():
     df[feat_cols] = df[feat_cols].fillna(0)
 
     # ── 税制改正補正（学習ラベル） ───────────────────────────────────────────
-    ## config.py から REFORM_CONFIG_PATH = "02_src_py/tax_reform_config.json"
+    ## 補正ルールは tax_reform.py の REFORMS。記録（スナップショット）が古ければ警告する（計算には影響しない）
     print("── 税制改正補正（label_correction） ──")
+    check_reform_snapshot()
     
     reforms = load_reforms(
-        REFORM_CONFIG_PATH,
         target_year=max(TRAIN_YEARS + [TEST_YEAR]),
         reform_type="label_correction",
     )
@@ -386,7 +386,7 @@ def main():
     ## data の フィールドは yearly_rows で設定
     pd.DataFrame(yearly_rows).to_csv(YEARLY_PATH, index=False, encoding="utf-8-sig")
 
-    ## config.py で設定 MODEL_CONFIG_PATH  = "models/model_config.json"
+    ## config.py で設定 MODEL_CONFIG_PATH  = "models/04out_model_config.json"
     ## data の フィールドは model_config で設定
     model_config = {
         "feature_cols": feat_cols,
@@ -401,7 +401,7 @@ def main():
             "n_jobs": LGBM_PARAMS["n_jobs"],
         },
         "min_tax": MIN_TAX,
-        "reform_config": REFORM_CONFIG_PATH,
+        "tax_reform_snapshot": TAX_REFORM_SNAPSHOT_PATH,
         "validation_mode": mode,
     }
     with open(MODEL_CONFIG_PATH, "w", encoding="utf-8") as f:

@@ -5,7 +5,7 @@
 
 04_model_train.py で保存したモデルを使い、翌年の個人別住民税額を予測する。
 実データがない場合は直近年をベースに給与・所得トレンドを外挿して推計する。
-tax_reform_config.json の feature_correction を適用して税制改正を特徴量に反映する。
+tax_reform.py の REFORMS（feature_correction）を適用して税制改正を特徴量に反映する。
 
 【実行方法】
   ※ 02_src_py/ の中で実行する例。プロジェクトルートからは uv run python 02_src_py/05_predict_2026.py でも実行できる。
@@ -17,10 +17,10 @@ tax_reform_config.json の feature_correction を適用して税制改正を特�
 
 【import】
   data/03out_individual_prepared.csv  ← 03 の出力
-  models/lgbm_model.txt               ← 04 の出力
-  models/model_config.json            ← 04 の出力
+  models/04out_lgbm_model.txt               ← 04 の出力
+  models/04out_model_config.json            ← 04 の出力
   config.py                           ← モデル設定（特徴量・パラメータ・学習年・テスト年）
-  tax_reform_config.json               ← 税制改正設定ファイル
+  tax_reform.py（REFORMS）               ← 税制改正の補正ルール
 
 【export】
   data/05out_prediction_YYYY.csv          ← 個人別予測値（信頼区間付き）
@@ -48,7 +48,7 @@ from tax_reform import (
     estimate_furusato_resident_deduction, compute_non_taxable_flag,
 )
 from config import (
-    PREPARED_DATA_PATH, MODEL_PATH, MODEL_CONFIG_PATH, REFORM_CONFIG_PATH,
+    PREPARED_DATA_PATH, MODEL_PATH, MODEL_CONFIG_PATH,
     PREDICT_YEAR, FEATURE_COLS, TARGET_COL,
     FURUSATO_PARAMS, HOUSING_PARAMS, MIN_TAX, CONFORMAL_COVERAGE,
     WAGE_RATE_OVERRIDE, WAGE_RATE_DELTA, LGBM_PARAMS, ALL_INCOME_COLS,
@@ -89,7 +89,6 @@ def compute_conformal_interval(
     04 と同じ label_correction を適用してから residual を取る。
     """
     label_reforms = load_reforms(
-        REFORM_CONFIG_PATH,
         target_year=max(config["train_years"] + [config["test_year"]]),
         reform_type="label_correction",
     )
@@ -261,7 +260,7 @@ def main():
         print(f"エラー: {MODEL_CONFIG_PATH} がありません。先に 04_model_train.py を実行してください。")
         return
 
-    # config.py で設定した MODEL_CONFIG_PATH（models/model_config.json）を読み込む
+    # config.py で設定した MODEL_CONFIG_PATH（models/04out_model_config.json）を読み込む
     config       = load_model_config(MODEL_CONFIG_PATH)
     feature_cols = config["feature_cols"]
     min_tax      = config["min_tax"]
@@ -271,7 +270,6 @@ def main():
 
     # 全年度（label_correction 済み）で再学習
     label_reforms = load_reforms(
-        REFORM_CONFIG_PATH,
         target_year=max(config["train_years"] + [config["test_year"]]),
         reform_type="label_correction",
     )
@@ -321,11 +319,11 @@ def main():
         # tax_reform feature_correction を適用
         print(f"\n── 税制改正補正（feature_correction, {args.year}年） ──")
         feature_reforms = load_reforms(
-            REFORM_CONFIG_PATH, target_year=args.year, reform_type="feature_correction"
+            target_year=args.year, reform_type="feature_correction"
         )
         # 給与所得控除の引き上げ（2026年〜 55万→65万）は、estimate_next_year() が
         # compute_salary_income(..., year=target_year) で年度判定して適用済み。
-        # tax_reform_config 側には持たせない（二重適用になるため）。
+        # tax_reform.py の REFORMS には持たせない（二重適用になるため）。
         print_reform_summary(feature_reforms)
         pred_df_out = apply_reforms(pred_df.copy(), feature_reforms)
 

@@ -35,7 +35,7 @@
 | 処理の流れ | 基幹系から抽出した個人別の収入・控除データ（`01_src_sql/00_CsvCreate.sql`）を起点に、特徴量エンジニアリング→学習→翌年予測→マクロ補正→可視化。最終出力は「自治体全体の翌年度税収見込み額（信頼区間つき）」 |
 | ダミー版の役割 | 実データがない段階でもパイプライン全体と精度検証手法を確認できるPoC用途。全国統計に基づく疑似データで代替 |
 | 実データ版の役割 | 基幹系データを投入する本番想定。列名・控除計算式を実データに置き換える。控除をフラグでしか持たない場合は金額化の加工を追加（`03_feature_eng.py`） |
-| 前提と限界 | 過去の実績パターンの学習に基づく。税制改正・急激な経済変動・自治体固有の制度（等級地ごとの非課税基準等）は`02_src_py/tax_reform_config.json`等の手動補正でカバーする。補正を未設定の場合は精度が異なる |
+| 前提と限界 | 過去の実績パターンの学習に基づく。税制改正・急激な経済変動・自治体固有の制度（等級地ごとの非課税基準等）は`tax_reform.py`の`REFORMS`等の手動補正でカバーする。補正を未設定の場合は精度が異なる |
 
 ---
 
@@ -123,7 +123,7 @@ Windows PowerShellでも同じコマンドがそのまま使用可能
 ├── 04_datacheck/   データ確認用のグラフ（02_datacheck の出力。fig0〜fig8）
 ├── 05_results/     最終レポート用のグラフ（07_visualize の出力。fig1〜fig7）
 ├── data/           【非公開】入力・中間・予測結果のCSV
-├── models/         【非公開】学習済みモデル lgbm_model.txt ／【公開】設定の記録 model_config.json
+├── models/         【非公開】学習済みモデル 04out_lgbm_model.txt ／【公開】設定の記録 04out_model_config.json・tax_reform_snapshot.json
 └── pyproject.toml / uv.lock / .python-version   Python環境の定義（uv sync で再現）
 ```
 
@@ -142,8 +142,8 @@ Windows PowerShellでも同じコマンドがそのまま使用可能
 │
 ├── 02_src_py/                    # 実行スクリプト本体（CLI版。ルート／02_src_py どちらからでも実行可）
 │   ├── config.py                 # 【原本】全設定値の一元管理（ここだけ触ればパラメータ調整可能）
-│   ├── tax_reform.py             # 【原本】税制改正補正ロジック（共通モジュール）
-│   ├── tax_reform_config.json     # 税制改正の補正ルール（手動管理。04〜06が読み込む）
+│   ├── tax_reform.py             # 【原本】税制改正モジュール（計算式と補正ルール REFORMS）
+│   │     out : models/tax_reform_snapshot.json（単独で実行したとき。補正ルールの記録）
 │   │
 │   ├── 01_generate_dummy.py      # ダミーデータ生成
 │   │     in  : config.pyの設定値
@@ -159,12 +159,12 @@ Windows PowerShellでも同じコマンドがそのまま使用可能
 │   │
 │   ├── 04_model_train.py         # モデル学習・精度検証
 │   │     in  : data/03out_individual_prepared.csv
-│   │     out : models/lgbm_model.txt, models/model_config.json,
+│   │     out : models/04out_lgbm_model.txt, models/04out_model_config.json,
 │   │           data/04out_val_result.csv, data/04out_yearly_result.csv,
 │   │           data/04out_walkforward_result.csv（--walkforward/--retrain-all時のみ）
 │   │
 │   ├── 05_predict_2026.py        # 翌年度予測
-│   │     in  : data/03out_individual_prepared.csv, models/lgbm_model.txt, models/model_config.json
+│   │     in  : data/03out_individual_prepared.csv, models/04out_lgbm_model.txt, models/04out_model_config.json
 │   │     out : data/05out_prediction_YYYY.csv, data/05out_prediction_summary_YYYY.csv
 │   │
 │   ├── 06_trend_correction.py    # マクロ補正（トレンド・税制改正）
@@ -172,7 +172,7 @@ Windows PowerShellでも同じコマンドがそのまま使用可能
 │   │     out : data/06out_prediction_adjusted_YYYY.csv, data/06out_prediction_adjusted_summary_YYYY.csv
 │   │
 │   └── 07_visualize.py           # グラフ出力
-│         in  : 04〜06の出力CSV群, models/model_config.json
+│         in  : 04〜06の出力CSV群, models/04out_model_config.json
 │         out : 05_results/*.png
 │
 ├── 03_notebooks/                 # 上記と同一ロジックのNotebook版（公開・閲覧用）
@@ -200,16 +200,17 @@ Windows PowerShellでも同じコマンドがそのまま使用可能
 │   ├── 05out_prediction_2026.csv       # 個人別予測値 ← 05 の出力
 │   └── 06out_prediction_adjusted_2026.csv  # 補正後予測値 ← 06 の出力
 │
-└── models/                       # フォルダ内は .gitignore 対象だが、model_config.json だけ除外設定で公開
-    ├── lgbm_model.txt            # 【非公開】学習済みモデル
-    └── model_config.json         # 【公開】04が出力する設定の記録（使った特徴量・学習年・パラメータ・検証モード）
+└── models/                       # フォルダ内は .gitignore 対象だが、04out_model_config.json と tax_reform_snapshot.json だけ除外設定で公開
+    ├── 04out_lgbm_model.txt            # 【非公開】学習済みモデル ← 04 の出力
+    ├── 04out_model_config.json         # 【公開】学習時の設定の記録（使った特徴量・学習年・パラメータ・検証モード）← 04 の出力
+    └── tax_reform_snapshot.json  # 【公開】税制改正の補正ルールの記録（閲覧専用・編集しない）← tax_reform.py の出力
 ```
 
 **【非公開】** は `.gitignore` 対象でGitHubに公開されない。フォルダに付いている場合は中身すべてが対象。上記のほか `__pycache__/`・`*.pyc`・`.venv/` も対象だが、ツリーには記載していない。
 
-> `data/`と`models/lgbm_model.txt`は`.gitignore`対象（非公開）。`models/model_config.json`だけは、このREADMEの結果がどの特徴量・学習年・検証モードで出たかを`config.py`を開かなくても確認できるよう公開している。`lgbm_model.txt`は実データ版も同じパスに書き込み、実データ由来の情報を含み得るため公開しない。GitHub上のフォルダ表示順（`01_src_sql`〜`05_results`）は、アルファベット順にしか並ばないGitHubの仕様に合わせて連番を振ったものであり、パイプラインの処理順（SQL抽出→スクリプト→Notebook→EDA→最終成果物）と一致させている。
+> `data/`と`models/04out_lgbm_model.txt`（学習済みモデル）は`.gitignore`対象（非公開）。`models/04out_model_config.json`だけは、このREADMEの結果がどの特徴量・学習年・検証モードで出たかを`config.py`を開かなくても確認できるよう公開している。`models/tax_reform_snapshot.json`も公開しており、`tax_reform.py`の`REFORMS`（補正ルールの唯一の正）の内容を書き出した閲覧専用の記録である。学習済みモデルは実データ由来の情報を含み得るため公開しない（実データ版は`models/lgbm_model.txt`に書き込み、こちらも`.gitignore`対象）。GitHub上のフォルダ表示順（`01_src_sql`〜`05_results`）は、アルファベット順にしか並ばないGitHubの仕様に合わせて連番を振ったものであり、パイプラインの処理順（SQL抽出→スクリプト→Notebook→EDA→最終成果物）と一致させている。
 
-- 出力ファイル名の先頭2桁は、そのファイルを`to_csv`で書き出したパイプラインのステップ番号を示す（例: `03out_`＝`03_feature_eng.py`の出力）。
+- 出力ファイル名の先頭2桁は、そのファイルを書き出したパイプラインのステップ番号を示す（例: `03out_`＝`03_feature_eng.py`の出力、`04out_model_config.json`＝`04_model_train.py`の出力）。例外は、番号付きのステップではなく`tax_reform.py`が書き出す`tax_reform_snapshot.json`。
 - 実データCSVに必要な列は `02_src_py/03_feature_eng.py` 冒頭のドキュメントを参照。SQLでの抽出方法は `01_src_sql/00_CsvCreate.sql` を参照。
 
 ---
@@ -464,10 +465,10 @@ Windows PowerShellでも同じコマンドがそのまま使用可能
 
 **留意点**
 
-- 税制改正がある年のラベルは `tax_reform_config.json` の `label_correction` で補正してから学習する（改正の影響を過去年に誤帰属させない）。
+- 税制改正がある年のラベルは `tax_reform.py` の `REFORMS`（`label_correction`）で補正してから学習する（改正の影響を過去年に誤帰属させない）。
 - 非課税基準（地方税法第295条）以下の予測値は強制的に0円に上書きされる。
 - `year` は特徴量（FEATURE_COLS）に含まれない。木モデルは訓練範囲外の年値を外挿できないためであり、年ごとの経済動向はダミーデータの上昇率設定や実データの特徴量分布として取り込む設計になっている。
-- 学習結果の設定（特徴量列・ハイパーパラメータ・検証モード等）は`models/model_config.json`にJSON形式で保存され、`05_predict_2026.py`・`07_visualize.py`が読み込む。
+- 学習結果の設定（特徴量列・ハイパーパラメータ・検証モード等）は`models/04out_model_config.json`にJSON形式で保存され、`05_predict_2026.py`・`07_visualize.py`が読み込む。
 
 ---
 
@@ -501,37 +502,47 @@ uv run python 02_src_py/05_predict_2026.py --wage-rate 0.025     # 給与上昇�
 | トレンド補正 | 年度別合算の系統的な過大・過小傾向を乗率で補正 |
 | 税制改正マクロ補正 | 扶養控除要件引き上げ・特定親族特別控除等の影響を推計して加減算 |
 
-補正ルールは `02_src_py/tax_reform_config.json` で管理されており、新たな税制改正が生じた場合はCSVに行を追加するだけで対応可能（コード修正不要）。
+補正ルールは `02_src_py/tax_reform.py` の末尾にある `REFORMS` で管理している（ここが唯一の正）。新たな税制改正が生じた場合は `REFORMS` に1つ追加し、新しい計算が必要なときだけ補正関数を書く。
 特に補正の必要がない場合（05にて既に設定済の場合を含む）は`06`実行しても`05`と同じ集計結果が出力される。
 
-**設定ファイルの書き方（`02_src_py/tax_reform_config.json`）**
+**補正ルールの書き方（`02_src_py/tax_reform.py` の `REFORMS`）**
 
-1つの改正を1ブロックで書く。例は定額減税（現在は無効）。
+1つの改正を1つの辞書で書く。例は定額減税（現在は無効）。
 
-```json
+```python
 {
-  "name": "teigaku_reduction",
-  "effective_year": 2024,
-  "one_time": true,
-  "active": false,
-  "reform_type": "label_correction",
-  "params": { "amount_per_person": 10000 },
-  "memo": "実データ投入時に定額減税前税額へ加工済みとするため無効"
-}
+    "name": "teigaku_reduction",
+    "func": _apply_teigaku_reduction,    # 補正関数を直接指定（06 が集計で扱うものは None）
+    "reform_type": "label_correction",
+    "effective_year": 2024,
+    "one_time": True,
+    "active": False,
+    "params": {"amount_per_person": 10_000},
+    "memo": "実データ投入時に定額減税前税額へ加工済みとするため無効",
+},
 ```
 
 | 項目 | 意味 |
 |---|---|
-| `name` | 補正の識別子。`tax_reform.py`の`REFORM_REGISTRY`のキーと対応する |
+| `name` | 補正の識別子（表示と、06での判定に使う） |
+| `func` | 補正関数。関数を直接指定するため、名前のずれが起きない。06が集計で扱う補正は `None` |
 | `effective_year` | 施行年度。予測年がこの年以降なら対象になる |
-| `active` | `true`で読み込む。**`false`なら無視され、補正は一切行われない** |
-| `one_time` | `true`は施行年のみ、`false`は施行年以降も継続 |
+| `active` | `True`で読み込む。**`False`なら無視され、補正は一切行われない** |
+| `one_time` | `True`は施行年のみ、`False`は施行年以降も継続 |
 | `reform_type` | 補正する段階。`label_correction`＝04で学習ラベル、`feature_correction`＝05で特徴量、`macro_correction`＝06で集計値 |
 | `params` | 補正関数に渡す値 |
-| `memo` | 備考（プログラムは読まない） |
+| `memo` | 備考（プログラムは使わない） |
 
-- 現在の設定は3件とも`active: false`のため、04〜06はいずれも「適用する補正なし」となる。
-- 給与所得控除の最低額引き上げ（2026年〜 55万→65万）は、この設定ファイルではなく`tax_reform.py`の`compute_salary_deduction()`が年度で判定して適用する（設定ファイルにも書くと二重適用になるため）。
+**変更したら記録を更新する**
+
+```bash
+uv run python 02_src_py/tax_reform.py   # models/tax_reform_snapshot.json を上書きし、現在の設定を一覧表示する
+```
+
+- `models/tax_reform_snapshot.json` は `REFORMS` を書き出した**閲覧専用の記録**で、パイプラインは読まない。編集しても計算には反映されない。
+- 記録を更新し忘れると、`04` が「記録が `REFORMS` と一致しない」と警告する（計算は `REFORMS` を使うため結果には影響しない）。
+- 現在の設定は3件とも`active: False`のため、04〜06はいずれも「適用する補正なし」となる。
+- 給与所得控除の最低額引き上げ（2026年〜 55万→65万）は、`REFORMS` ではなく`compute_salary_deduction()`が年度で判定して適用する（両方に書くと二重適用になるため）。
 
 
 
@@ -553,15 +564,15 @@ uv run python 02_src_py/05_predict_2026.py --wage-rate 0.025     # 給与上昇�
 
 ---
 
-### `02_src_py/tax_reform.py` — 税制改正補正モジュール
+### `02_src_py/tax_reform.py` — 税制改正モジュール
 
-`02_src_py/`配下の01〜06から呼び出される共通モジュール（原本は`02_src_py/`、`03_notebooks/`に同じもののコピー）。以下の主要計算式を提供する。
+`02_src_py/`配下の01〜06から呼び出される共通モジュール（原本は`02_src_py/`、`03_notebooks/`に同じもののコピー）。法律で決まる計算と、税制改正の補正ルールを持つ。
 
-- 給与所得控除（年次別のブラケット計算）
-- 公的年金等控除（65歳未満・以上で異なる計算式）
-- 基礎控除（所得水準による逓減）
-- ふるさと納税の住民税控除推計
-- 非課税判定（地方税法第295条）
+| 部分 | 内容 |
+|---|---|
+| `compute_*` 関数 | 年度で決まる恒久的な計算式（給与所得控除・公的年金等控除・基礎控除・ふるさと納税の住民税控除推計・非課税判定〔地方税法第295条〕） |
+| `REFORMS`（末尾） | 期間限定・単年の補正ルール。`active`で有効/無効を切り替える（補正ルールの唯一の正） |
+| 単独で実行したとき | `uv run python 02_src_py/tax_reform.py` で `REFORMS` を `models/tax_reform_snapshot.json` に書き出し、一覧表示する |
 
 **留意点**
 
@@ -667,8 +678,11 @@ FEATURE_COLS = RAW_FEATURE_COLS + GENERATED_FEATURE_COLS
 
 ### 税制改正に対応したいとき
 
-1. `02_src_py/tax_reform_config.json` の `reforms` に1ブロック追加（`name`, `effective_year`, `reform_type`, `params` 等）
-2. 新しい計算式が必要な場合のみ `tax_reform.py` に関数を追加し、`REFORM_REGISTRY` に登録する
+1. 新しい計算が必要な場合のみ、`tax_reform.py` に補正関数（`_apply_<name>`）を追加する
+2. `tax_reform.py` 末尾の `REFORMS` に辞書を1つ追加する（`func` に関数を直接指定）
+3. `uv run python 02_src_py/tax_reform.py` を実行して記録（`models/tax_reform_snapshot.json`）を更新する
+
+年度で決まる恒久的な計算式の変更（給与所得控除の最低額など）は、`REFORMS` ではなく `compute_*` 関数側を直す。
 
 ---
 
