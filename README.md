@@ -115,26 +115,6 @@ Windows PowerShellでも同じコマンドがそのまま使用可能
 
 ---
 
-## フォルダ構成
-
-```
-.
-├── 01_src_sql/     実データを基幹系DBから抽出するSQL
-├── 02_src_py/      パイプライン本体（CLI版 01〜07）と、設定 config.py・税制ロジック tax_reform.py【原本】
-├── 03_notebooks/   02_src_py と同じ処理のNotebook版（公開・閲覧用）
-├── 04_datacheck/   データ確認用のグラフ（02_datacheck の出力。fig0〜fig8）
-├── 05_results/     最終レポート用のグラフ（07_visualize の出力。fig1〜fig7）
-├── data/           【非公開】入力・中間・予測結果のCSV
-├── models/         【非公開】学習済みモデル 04out_lgbm_model.txt ／【公開】設定の記録 04out_model_config.json・tax_reform_snapshot.json
-└── pyproject.toml / uv.lock / .python-version   Python環境の定義（uv sync で再現）
-```
-
-処理の流れ：`01_src_sql`（抽出）→ `data/` → `02_src_py`（加工・学習・予測。`03_notebooks`は同じ処理の公開用）→ `models/`・`04_datacheck/`・`05_results/`
-
-各ファイルの中身や入出力の詳細は、次の「ファイル構成」を参照。
-
----
-
 ## ファイル構成
 
 ```
