@@ -1,0 +1,15 @@
+data/
+
+models/*
+!models/04out_model_config.json
+!models/tax_reform_snapshot.json
+
+BAK/
+CLAUDE.md
+memo.md
+.claude/
+
+__pycache__/
+*.pyc
+
+.venv/

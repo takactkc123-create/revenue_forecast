@@ -1,0 +1,551 @@
+"""
+05_predict_2026.py
+==================
+個人住民税予測モデル - Step5: 翌年度予測（デフォルト: 2026年）
+
+04_model_train.py で保存したモデルを使い、翌年の個人別住民税額を予測する。
+実データがない場合は直近年をベースに給与・所得トレンドを外挿して推計する。
+tax_reform.py の REFORMS（feature_correction）を適用して税制改正を特徴量に反映する。
+
+【実行方法】
+  ※ 02_src_py/ の中で実行する例。プロジェクトルートからは uv run python 02_src_py/05_predict_2026.py でも実行できる。
+  uv run python 05_predict_2026.py
+  uv run python 05_predict_2026.py --year 2027
+  uv run python 05_predict_2026.py --file data/individual_2026_input.csv  # 実データがある場合
+  uv run python 05_predict_2026.py --wage-rate 0.025   # 給与上昇率を直接指定
+  uv run python 05_predict_2026.py --wage-delta 0.013  # 実績トレンド + 1.3%
+  uv run python 05_predict_2026.py --no-backtest       # 過去年検証を省略（約30秒短縮）
+  uv run python 05_predict_2026.py --growth table      # 伸び率を config の FORECAST_GROWTH_TABLE（春闘など）から取る
+  uv run python 05_predict_2026.py --growth none       # 伸ばさない（直近年の所得のまま。06 は自動のトレンド補正を掛けない）
+  uv run python 05_predict_2026.py --pension-rate 0.019  # 年金収入の伸び率を直接指定
+
+【伸び率の方式】（既定は config の GROWTH_SOURCE="auto"）
+  auto : 実績の全員平均の直近2年の伸び率 / table : FORECAST_GROWTH_TABLE の値（事業所得は自動）/ none : すべて0%
+  直接指定（--wage-rate・--pension-rate・WAGE_RATE_OVERRIDE）と上乗せ（--wage-delta）は方式より優先する。
+  過去年検証は本番と同じ方式で行う。直接指定・上乗せがあるときは auto で検証し、06 は自動のトレンド補正を掛けない。
+
+【import】
+  data/03out_individual_prepared.csv  ← 03 の出力
+  models/04out_lgbm_model.txt               ← 04 の出力
+  models/04out_model_config.json            ← 04 の出力
+  config.py                           ← モデル設定（特徴量・パラメータ・学習年・テスト年）
+  tax_reform.py（REFORMS）               ← 税制改正の補正ルール
+
+【export】
+  data/05out_prediction_YYYY.csv          ← 個人別予測値（信頼区間付き）
+  data/05out_prediction_summary_YYYY.csv  ← 合計・信頼区間サマリー
+  data/05out_forecast_backtest.csv        ← 05 と同じ方法で過去年を予測した誤差（06 のトレンド補正の根拠）
+
+
+"""
+
+import argparse
+import contextlib
+import io
+import json
+import os
+import numpy as np
+import pandas as pd
+import lightgbm as lgb
+
+# data/ 等の相対パスはカレントディレクトリ基準のため、02_src_py/ の中から実行した場合は
+# プロジェクトルートへ戻す（2026-09-17追加）。ルートから実行した場合は何もしない。
+# import は sys.path（スクリプトの置き場所）を見るため、chdir しても config / tax_reform は読める。
+if os.path.basename(os.getcwd()) == "02_src_py":
+    os.chdir("..")
+
+from tax_reform import (
+    load_reforms, apply_reforms, print_reform_summary,
+    compute_salary_income, compute_basic_deduction,
+    estimate_furusato_resident_deduction,
+    get_min_tax, get_housing_credit_upper, non_taxable_flag_from_df,
+)
+from config import (
+    PREPARED_DATA_PATH, MODEL_PATH, MODEL_CONFIG_PATH,
+    PREDICT_YEAR, FEATURE_COLS, TARGET_COL,
+    FURUSATO_PARAMS, HOUSING_PARAMS, CONFORMAL_COVERAGE,
+    WAGE_RATE_OVERRIDE, WAGE_RATE_DELTA, LGBM_PARAMS, ALL_INCOME_COLS,
+    GROWTH_SOURCE, FORECAST_GROWTH_TABLE,
+)
+
+
+# ─── モデル設定 JSON の読み込み ─────────────────────────────────────────────────
+def load_model_config(path: str) -> dict:
+    with open(path, encoding="utf-8") as f:
+        config = json.load(f)
+    return config
+
+
+# ─── 住宅ローン控除 翌年推計 ──────────────────────────────────────────────────
+def _estimate_housing_credit(
+    prev_df: pd.DataFrame,
+    n: int,
+    rng: np.random.Generator,
+    target_year: int,
+) -> np.ndarray:
+    if "住宅借入金特別控除" not in prev_df.columns:
+        return np.zeros(n, dtype=int)
+    prev_housing = prev_df["住宅借入金特別控除"].values.astype(float)
+    keep         = rng.random(n) >= HOUSING_PARAMS["annual_exit_rate"]
+    result       = np.where(keep, prev_housing, 0.0)
+    return np.minimum(result, get_housing_credit_upper(target_year)).round(0).astype(int)
+
+
+# ─── Split Conformal Prediction（信頼区間） ───────────────────────────────────
+def compute_conformal_interval(
+    config: dict,
+    df_prep: pd.DataFrame,
+    feature_cols: list,
+    coverage: float,
+) -> tuple[float, np.ndarray]:
+    """
+    TEST_YEAR のホールドアウト残差を使って信頼区間幅（±q）を計算する。
+    04 と同じ label_correction を適用してから residual を取る。
+    """
+    label_reforms = load_reforms(
+        target_year=max(config["train_years"] + [config["test_year"]]),
+        reform_type="label_correction",
+    )
+    df_corrected = apply_reforms(df_prep.copy(), label_reforms)
+    df_train     = df_corrected[df_corrected["年度"].isin(config["train_years"])].copy()
+    df_test      = df_corrected[df_corrected["年度"] == config["test_year"]].copy()
+
+    model_c = lgb.LGBMRegressor(**config["lgbm_params"])
+    model_c.fit(
+        df_train[feature_cols].fillna(0).values,
+        df_train[TARGET_COL].values,
+        callbacks=[lgb.log_evaluation(period=-1)],
+    )
+    pred_calib = np.maximum(
+        model_c.predict(df_test[feature_cols].fillna(0).values),
+        get_min_tax(config["test_year"]),
+    )
+    actual_calib = df_prep[df_prep["年度"] == config["test_year"]][TARGET_COL].values
+    scores = np.abs(actual_calib - pred_calib)
+    q      = float(np.quantile(scores, coverage))
+    return q, scores
+
+
+# ─── 伸び率の決め方（給与・年金・事業所得） ─────────────────────────────────
+def decide_growth_rates(
+    df: pd.DataFrame,
+    target_year: int,
+    growth_source: str = "auto",
+    wage_rate: float | None = None,
+    wage_delta: float = 0.0,
+    pension_rate: float | None = None,
+) -> dict:
+    """
+    給与・年金・事業所得の伸び率を決める（estimate_next_year() に渡す）。
+
+    growth_source:
+      "auto"  : 実績の全員平均の直近2年の伸び率
+      "table" : config の FORECAST_GROWTH_TABLE の target_year の値（事業所得は自動）。
+                給与・年金の値が欠けていればエラー（欠けた年だけ自動にすると、過去年検証と本番で方式が混ざるため）
+      "none"  : すべて0%（外挿しない）
+    直接指定（wage_rate・pension_rate）と上乗せ（wage_delta）は growth_source より優先する。
+
+    Returns:
+        {"給与": {"col", "rate", "source"}, "年金": {...}, "事業所得": {...}}
+    """
+    if growth_source not in ("auto", "table", "none"):
+        raise ValueError(f"伸び率の方式は auto / table / none のいずれか（指定: {growth_source}）")
+    salary_col  = "給与収入" if "給与収入" in df.columns else "給与所得"
+    # 年金は収入（雑収入）に伸び率を掛け、所得は控除を引き直して計算する。雑収入の列がないデータは雑所得に掛ける
+    pension_col = "雑収入_公的年金等" if "雑収入_公的年金等" in df.columns else "雑所得_公的年金等"
+    items = {  # 名前: (伸び率を掛ける列, FORECAST_GROWTH_TABLE のキー。None は表を使わない)
+        "給与"    : (salary_col,        "給与収入"),
+        "年金"    : (pension_col,       "雑収入_公的年金等"),
+        "事業所得": ("事業所得_営業等", None),
+    }
+
+    def auto_rate(col: str) -> float:
+        if col not in df.columns:
+            return 0.0
+        yr_means = df.groupby("年度")[col].mean()
+        return float(yr_means.pct_change().dropna().tail(2).mean()) if len(yr_means) >= 2 else 0.0
+
+    rates = {}
+    for name, (col, table_key) in items.items():
+        if growth_source == "none":
+            rate, source = 0.0, "0%"
+        elif growth_source == "table" and table_key is not None:
+            value = FORECAST_GROWTH_TABLE.get(table_key, {}).get(target_year)
+            if value is None:
+                raise ValueError(f"config の FORECAST_GROWTH_TABLE「{table_key}」に {target_year}年度の値がありません（伸び率の方式 table）")
+            rate, source = float(value), "表"
+        else:
+            rate, source = auto_rate(col), "自動"
+        rates[name] = {"col": col, "rate": rate, "source": source}
+
+    if wage_rate is not None:
+        rates["給与"].update(rate=float(wage_rate), source="直接指定")
+    elif wage_delta != 0.0:
+        rates["給与"].update(rate=rates["給与"]["rate"] + wage_delta,
+                            source=f"{rates['給与']['source']}＋上乗せ{wage_delta * 100:+.2f}%")
+    if pension_rate is not None:
+        rates["年金"].update(rate=float(pension_rate), source="直接指定")
+    return rates
+
+
+# ─── 直近年ベースの翌年レコード推計 ──────────────────────────────────────────
+def estimate_next_year(
+    df: pd.DataFrame,
+    target_year: int,
+    rates: dict,
+) -> pd.DataFrame:
+    """直近年のレコードをコピーし、rates（decide_growth_rates() の戻り値）の伸び率で所得を伸ばして翌年を推計する。"""
+    last_year = df["年度"].max()
+    base_df   = df[df["年度"] == last_year].copy()
+
+    has_gross = "給与収入" in df.columns
+    for name, r in rates.items():
+        print(f"  {name}（{r['col']}）の伸び率: {r['rate'] * 100:+.2f}%（{r['source']}）")
+    eff_wage_rate = rates["給与"]["rate"]
+
+    rng     = np.random.default_rng(42)
+    next_df = base_df.copy()
+    next_df["年度"]              = target_year
+    next_df["前年_総所得金額等"] = next_df["総所得金額等"]
+    next_df["前年_年税額"]   = next_df["年税額"]
+    if "課税標準額" in next_df.columns:
+        next_df["前年_課税標準額"] = next_df["課税標準額"]
+    next_df["継続者フラグ"] = 1
+
+    noise = rng.normal(1.0, 0.02, size=len(next_df))
+
+    if has_gross:
+        next_df["給与収入"] = (
+            next_df["給与収入"] * (1 + eff_wage_rate) * noise
+        ).clip(0).round(0).astype(int)
+        next_df["給与所得"] = (
+            compute_salary_income(next_df["給与収入"].values, year=target_year)
+        ).round(0).astype(int)
+    else:
+        next_df["給与所得"] = (
+            next_df["給与所得"] * (1 + eff_wage_rate) * noise
+        ).clip(0).round(0).astype(int)
+
+    # 事業所得・年金収入（gross）にトレンドを適用。年金所得は収入から再計算
+    for col in ["事業所得_営業等", "雑収入_公的年金等"]:
+        if col in next_df.columns:
+            rate  = rates["事業所得"]["rate"] if col == "事業所得_営業等" else rates["年金"]["rate"]
+            noise = rng.normal(1.0, 0.02, size=len(next_df))
+            next_df[col] = (next_df[col] * (1 + rate) * noise).clip(0).round(0).astype(int)
+    if "雑収入_公的年金等" in next_df.columns:
+        from tax_reform import compute_pension_income
+        next_df["雑所得_公的年金等"] = compute_pension_income(
+            next_df["雑収入_公的年金等"].values, next_df["年齢"].values
+        ).round(0).astype(int)
+    elif "雑所得_公的年金等" in next_df.columns:
+        rate  = rates["年金"]["rate"]
+        noise = rng.normal(1.0, 0.02, size=len(next_df))
+        next_df["雑所得_公的年金等"] = (next_df["雑所得_公的年金等"] * (1 + rate) * noise).clip(0).round(0).astype(int)
+
+    inc_cols = [c for c in ALL_INCOME_COLS if c in next_df.columns]
+    next_df["総所得金額等"] = next_df[inc_cols].sum(axis=1)
+    next_df["総所得金額等_前年差"] = next_df["総所得金額等"] - next_df["前年_総所得金額等"]
+
+    gross_for_deduct = (
+        next_df["給与収入"] if has_gross else next_df["給与所得"]
+    )
+    next_df["社会保険料控除"] = (gross_for_deduct * 0.14).round(0).astype(int)
+    next_df["基礎控除"]      = (
+        compute_basic_deduction(next_df["総所得金額等"].values)
+    ).round(0).astype(int)
+
+    deduct_cols = [
+        "社会保険料控除", "小規模企業共済等掛金控除", "生命保険料控除",
+        "地震保険料控除", "雑損控除", "医療費控除",
+        "障害者控除", "寡婦控除", "配偶者控除", "配偶者特別控除",
+        "扶養控除", "基礎控除", "勤労学生控除",
+        "寄附金控除",
+    ]
+    next_df["差引所得控除合計"] = sum(
+        next_df[c] for c in deduct_cols if c in next_df.columns
+    )
+
+    safe_total = next_df["総所得金額等"].replace(0, np.nan)
+    next_df["所得控除率"]  = (next_df["差引所得控除合計"] / safe_total).fillna(0).clip(0, 1)
+    next_df["課税標準額"] = (
+        next_df["総所得金額等"] - next_df["差引所得控除合計"]
+    ).clip(0).round(0).astype(int)
+    next_df["課税標準率"] = (
+        next_df["課税標準額"] / safe_total
+    ).fillna(0).clip(0, 1)
+
+    # 税額控除推計
+    print("  税額控除推計:")
+    next_df["住宅借入金特別控除"] = _estimate_housing_credit(base_df, len(next_df), rng, target_year)
+    next_df["寄附金税額控除"] = estimate_furusato_resident_deduction(
+        next_df["課税標準額"].values,
+        donation_rate=FURUSATO_PARAMS["donation_rate"],
+        one_stop_ratio=FURUSATO_PARAMS["one_stop_ratio"],
+    ).astype(int)
+
+    n_h   = int((next_df["住宅借入金特別控除"]  > 0).sum())
+    oku_h = next_df["住宅借入金特別控除"].sum()  / 1e8
+    oku_f = next_df["寄附金税額控除"].sum() / 1e8
+    print(f"    住宅ローン控除  : {oku_h:.3f}億円 ({n_h:,}人対象)")
+    print(f"    ふるさと納税控除: {oku_f:.3f}億円 (寄付率 {FURUSATO_PARAMS['donation_rate']*100:.1f}%)")
+
+    return next_df
+
+
+# ─── 過去年検証（06 のトレンド補正の根拠） ─────────────────────────────────────
+BACKTEST_PATH = "data/05out_forecast_backtest.csv"
+
+
+def run_forecast_backtest(
+    df_prep: pd.DataFrame,
+    feature_cols: list,
+    lgbm_params: dict,
+    growth_source: str = "auto",
+    method_label: str | None = None,
+    min_train: int = 2,
+) -> pd.DataFrame:
+    """
+    05 と同じ方法で過去年を予測し、実績と比べる（06 のトレンド補正の根拠）。
+
+    04 の検証は検証年の本当の特徴量で予測するため、モデル自体の誤差しか測れない。
+    本番の予測では estimate_next_year() で特徴量を推計するので、その誤差も含めてここで測る。
+    各年 t について、t より前の年だけで学習し、estimate_next_year(t より前, t) の特徴量で予測する。
+    伸び率は本番と同じ方式（growth_source）で決める。トレンド補正の乗率は「その方式の偏り」を打ち消す値なので、
+    方式をそろえないと補正がずれる。直接指定・上乗せは1つの値で過去年を予測できないので使わない
+    （その場合、main は auto で検証し、method_label にその旨を書く）。
+    """
+    method_label = method_label or growth_source
+    years = sorted(df_prep["年度"].unique().tolist())
+    rows  = []
+    for t in [y for y in years if len([p for p in years if p < y]) >= min_train]:
+        hist = df_prep[df_prep["年度"] < t].copy()
+        tr   = apply_reforms(hist.copy(), load_reforms(target_year=t - 1, reform_type="label_correction"))
+        m    = lgb.LGBMRegressor(**lgbm_params)
+        m.fit(tr[feature_cols].values, tr[TARGET_COL].values, callbacks=[lgb.log_evaluation(period=-1)])
+
+        # estimate_next_year() と補正ルールの途中経過は、4年分だと長いので表示しない
+        with contextlib.redirect_stdout(io.StringIO()):
+            nx = estimate_next_year(hist, t, decide_growth_rates(hist, t, growth_source))
+            nx = apply_reforms(nx, load_reforms(target_year=t, reform_type="feature_correction"))
+        pred = np.maximum(m.predict(nx[feature_cols].fillna(0).values), get_min_tax(t))
+        pred = np.where(non_taxable_flag_from_df(nx), 0, pred)
+
+        act = df_prep.loc[df_prep["年度"] == t, TARGET_COL]
+        rows.append({
+            "予測年度"         : t,
+            "訓練年"           : f"{min(hist['年度'])}〜{t - 1}",
+            "実績_億円"        : round(act.sum() / 1e8, 2),
+            "予測_億円"        : round(pred.sum() / 1e8, 2),
+            "誤差率_%"         : round((pred.sum() - act.sum()) / act.sum() * 100, 2),
+            "人数_実績"        : len(act),
+            "人数_予測"        : len(nx),
+            "1人あたり誤差率_%": round((pred.mean() - act.mean()) / act.mean() * 100, 2),
+            "伸び率の方式"     : method_label,
+        })
+    return pd.DataFrame(rows)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--year", type=int, default=PREDICT_YEAR,
+                        help=f"予測年度（デフォルト: {PREDICT_YEAR}）")
+    parser.add_argument("--file", default=None,
+                        help="実データCSVパス（省略時は直近年から自動推計）")
+    wage_grp = parser.add_mutually_exclusive_group()
+    wage_grp.add_argument("--wage-rate",  type=float, default=None,
+                          help="給与収入上昇率を直接指定（例: 0.025 → +2.5%%）")
+    wage_grp.add_argument("--wage-delta", type=float, default=WAGE_RATE_DELTA,
+                          help="実績トレンドへの加算値（例: 0.013 → +1.3%%）")
+    parser.add_argument("--no-backtest", action="store_true",
+                        help="過去年検証（06 のトレンド補正の根拠）を省略する（約30秒短縮）")
+    parser.add_argument("--growth", choices=["auto", "table", "none"], default=None,
+                        help=f"伸び率の方式（省略時は config の GROWTH_SOURCE＝{GROWTH_SOURCE}）")
+    parser.add_argument("--pension-rate", type=float, default=None,
+                        help="年金収入の伸び率を直接指定（例: 0.019 → +1.9%%）")
+    args = parser.parse_args()
+
+    print(f"=== 05: {args.year}年度 予測 ===\n")
+
+    
+    if not os.path.exists(MODEL_CONFIG_PATH):
+        print(f"エラー: {MODEL_CONFIG_PATH} がありません。先に 04_model_train.py を実行してください。")
+        return
+
+    # config.py で設定した MODEL_CONFIG_PATH（models/04out_model_config.json）を読み込む
+    config       = load_model_config(MODEL_CONFIG_PATH)
+    feature_cols = config["feature_cols"]
+    min_tax      = get_min_tax(args.year)   # 予測年度の均等割（tax_reform.py の表）
+
+    df_prep = pd.read_csv(PREPARED_DATA_PATH, encoding="utf-8-sig")
+    df_prep[feature_cols] = df_prep[feature_cols].fillna(0)
+
+    # 全年度（label_correction 済み）で再学習
+    label_reforms = load_reforms(
+        target_year=max(config["train_years"] + [config["test_year"]]),
+        reform_type="label_correction",
+    )
+    df_for_train = apply_reforms(df_prep.copy(), label_reforms)
+    model        = lgb.LGBMRegressor(**config["lgbm_params"])
+    all_years    = sorted(df_for_train["年度"].unique().tolist())
+    print(f"全年度再学習中... {all_years}（{len(df_for_train):,} 件）")
+    model.fit(
+        df_for_train[feature_cols].values,
+        df_for_train[TARGET_COL].values,
+        callbacks=[lgb.log_evaluation(period=-1)],
+    )
+    print("完了\n")
+
+    # 信頼区間キャリブレーション
+    print("信頼区間キャリブレーション中...")
+    q_cov, calib_scores = compute_conformal_interval(
+        config, df_prep, feature_cols, coverage=CONFORMAL_COVERAGE
+    )
+    print(f"  {CONFORMAL_COVERAGE*100:.0f}%区間幅: ±{q_cov/1e4:.1f}万円/人\n")
+
+    # 伸び率の方式と直接指定（直接指定・上乗せがあると、過去年検証でその偏りを測れない）
+    growth_source = args.growth or GROWTH_SOURCE
+    wage_rate     = args.wage_rate if args.wage_rate is not None else WAGE_RATE_OVERRIDE
+    wage_delta    = args.wage_delta
+    direct        = wage_rate is not None or wage_delta != 0.0 or args.pension_rate is not None
+    growth        = None   # --file のときは外挿しないので None のまま
+
+    # 予測データ準備
+    if args.file:
+        print(f"実データ読込: {args.file}")
+        pred_df      = pd.read_csv(args.file, encoding="utf-8-sig")
+        pred_df[feature_cols] = pred_df[feature_cols].fillna(0)
+        feature_reforms = []
+        pred_df_out  = pred_df
+        X            = pred_df[feature_cols].fillna(0).values
+        pred_tax     = np.maximum(model.predict(X), min_tax).round(0).astype(int)
+        total_pre_oku = pred_tax.sum() / 1e8
+        total_oku     = total_pre_oku
+    else:
+        print(f"自動推計モード（直近年を外挿。伸び率の方式: {growth_source}{'、直接指定あり' if direct else ''}）")
+        growth  = decide_growth_rates(df_prep, args.year, growth_source, wage_rate, wage_delta, args.pension_rate)
+        pred_df = estimate_next_year(df_prep, args.year, growth)
+
+        # 補正前の予測（税制改正なしベースライン）
+        X_pre         = pred_df[feature_cols].fillna(0).values
+        pred_tax_pre  = np.maximum(model.predict(X_pre), min_tax).round(0).astype(int)
+        total_pre_oku = pred_tax_pre.sum() / 1e8
+
+        # tax_reform feature_correction を適用
+        print(f"\n── 税制改正補正（feature_correction, {args.year}年） ──")
+        feature_reforms = load_reforms(
+            target_year=args.year, reform_type="feature_correction"
+        )
+        # 給与所得控除の引き上げ（2026年〜 55万→65万）は、estimate_next_year() が
+        # compute_salary_income(..., year=target_year) で年度判定して適用済み。
+        # tax_reform.py の REFORMS には持たせない（二重適用になるため）。
+        print_reform_summary(feature_reforms)
+        pred_df_out = apply_reforms(pred_df.copy(), feature_reforms)
+
+        X_reform  = pred_df_out[feature_cols].fillna(0).values
+        pred_tax  = np.maximum(model.predict(X_reform), min_tax).round(0).astype(int)
+        total_oku = pred_tax.sum() / 1e8
+
+    # 信頼区間
+    pred_tax_lower = np.maximum(pred_tax - q_cov, min_tax).round(0).astype(int)
+    pred_tax_upper = (pred_tax + q_cov).round(0).astype(int)
+
+    # ── 非課税者の予測・信頼区間を 0 に上書き ────────────────────────────────
+    # 均等割（min_tax）は課税者の下限。非課税基準以下の人には適用しない。
+    _non_taxable = non_taxable_flag_from_df(pred_df_out)
+    pred_tax       = np.where(_non_taxable, 0, pred_tax)
+    pred_tax_lower = np.where(_non_taxable, 0, pred_tax_lower)
+    pred_tax_upper = np.where(_non_taxable, 0, pred_tax_upper)
+    total_oku      = pred_tax.sum() / 1e8
+
+    last_year_total = (
+        df_prep[df_prep["年度"] == df_prep["年度"].max()][TARGET_COL].sum() / 1e8
+    )
+    diff = total_oku - last_year_total
+
+    # ── 結果表示 ─────────────────────────────────────────────────────────────
+    print(f"\n{'='*60}")
+    print(f"  前年実績（{df_prep['年度'].max()}年）    : {last_year_total:>8.2f} 億円")
+    if feature_reforms:
+        reform_effect = total_oku - total_pre_oku
+        print(f"  税制改正補正前（推計ベース）: {total_pre_oku:>8.2f} 億円")
+        print(f"  税制改正補正効果           : {reform_effect:>+8.2f} 億円")
+    print(f"  {args.year}年度 課税合計（最終）: {total_oku:>8.2f} 億円  ({diff/last_year_total*100:>+.2f}%)")
+    print(f"  予測人員                   : {len(pred_df_out):>8,} 人")
+    n_taxable = int((pred_tax != 0).sum())  # 2026-09-09追加: 非課税者を除いた課税者数
+    print(f"  うち課税者数（非課税除く）  : {n_taxable:>8,} 人")
+    total_lower = pred_tax_lower.sum() / 1e8
+    total_upper = pred_tax_upper.sum() / 1e8
+    print(f"  {CONFORMAL_COVERAGE*100:.0f}%信頼区間 [{total_lower:.2f} 〜 {total_upper:.2f}] 億円")
+    print(f"{'='*60}")
+
+    # 年齢区分別内訳
+    print("\n── 年齢区分別内訳 ──")
+    age_col = "年齢区分" if "年齢区分" in pred_df_out.columns else None
+    if age_col:
+        print(pred_df_out.assign(pred_tax_amount=pred_tax).groupby("年齢区分")["pred_tax_amount"].agg(
+            人員="count",
+            合計_億円=lambda x: round(x.sum() / 1e8, 2),
+            平均_万円=lambda x: round(x.mean() / 1e4, 1),
+        ).to_string())
+
+    # CSV 出力
+    out_cols = ["仮ID", "年度"]
+    for c in ["年齢区分", "総所得金額等", "課税標準額", "徴収区分",
+              "寄附金税額控除", "住宅借入金特別控除"]:
+        if c in pred_df_out.columns:
+            out_cols.append(c)
+
+    out_df = pred_df_out[out_cols].copy()
+    out_df["pred_tax_amount"]                        = pred_tax
+    out_df[f"pred_tax_lower_{int(CONFORMAL_COVERAGE*100)}"] = pred_tax_lower
+    out_df[f"pred_tax_upper_{int(CONFORMAL_COVERAGE*100)}"] = pred_tax_upper
+
+    out_path = f"data/05out_prediction_{args.year}.csv"
+    sum_path = f"data/05out_prediction_summary_{args.year}.csv"
+
+    out_df.to_csv(out_path, index=False, encoding="utf-8-sig")
+    # 使った伸び率の方式と値（06 はこの列を見て、自動のトレンド補正を掛けるかを決める）
+    growth_cols = {
+        "伸び率の方式"    : "file（実データ）" if args.file else growth_source,
+        "伸び率の直接指定": "あり" if direct else "なし",
+    }
+    for name, r in (growth or {}).items():
+        growth_cols[f"{name}の伸び率_%"]   = round(r["rate"] * 100, 2)
+        growth_cols[f"{name}の伸び率の出所"] = r["source"]
+    pd.DataFrame([{
+        "予測年度"        : args.year,
+        "予測合計_億円"   : round(total_oku, 2),
+        f"CI下限_{int(CONFORMAL_COVERAGE*100)}%_億円": round(total_lower, 2),
+        f"CI上限_{int(CONFORMAL_COVERAGE*100)}%_億円": round(total_upper, 2),
+        "前年実績_億円"   : round(last_year_total, 2),
+        "前年比_億円"     : round(diff, 2),
+        "前年比率_%"      : round(diff / last_year_total * 100, 2),
+        "予測人員"        : len(out_df),
+        "課税者数"        : n_taxable,  # 2026-09-09追加: 非課税者を除いた課税者数
+        "適用補正数"      : len(feature_reforms),
+        "適用補正名"      : "|".join(r["name"] for r in feature_reforms) if feature_reforms else "なし",
+        **growth_cols,
+    }]).to_csv(sum_path, index=False, encoding="utf-8-sig")
+
+    print(f"\n→ {out_path} に個人別予測を保存")
+    print(f"→ {sum_path} に集計サマリーを保存")
+
+    # ── 過去年検証（06 のトレンド補正の根拠） ──
+    if args.no_backtest:
+        print("\n過去年検証: スキップ（--no-backtest）。06 は前回の結果ファイルを使う")
+    else:
+        print("\n── 過去年検証（05 と同じ方法で過去年を予測し、実績と比べる） ──")
+        # 本番と同じ方式で検証する。直接指定・上乗せは過去年に当てはめられないので auto で検証し、その旨を記録する
+        bt_source = "auto" if direct else growth_source
+        bt_label  = "auto（直接指定は検証不可）" if direct else growth_source
+        bt_df = run_forecast_backtest(df_prep, feature_cols, config["lgbm_params"], bt_source, bt_label)
+        bt_df.to_csv(BACKTEST_PATH, index=False, encoding="utf-8-sig")
+        print(bt_df.to_string(index=False))
+        print(f"  平均誤差率 {bt_df['誤差率_%'].mean():+.2f}%  標準偏差 {bt_df['誤差率_%'].std():.2f}%")
+        print(f"→ {BACKTEST_PATH} に過去年検証の結果を保存")
+
+    print("\n次: python 06_trend_correction.py")
+
+
+if __name__ == "__main__":
+    main()
