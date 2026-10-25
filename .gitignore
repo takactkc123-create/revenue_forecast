@@ -13,3 +13,14 @@ __pycache__/
 *.pyc
 
 .venv/
+
+# 認証情報（念のための網。このプロジェクトでは置かない）
+kaggle.json
+credentials*.json
+.env
+.env.*
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+pseudo_key*
