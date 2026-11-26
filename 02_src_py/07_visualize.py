@@ -3,7 +3,8 @@
 ===============
 個人住民税予測モデル - Step7: 結果グラフ化
 
-04〜06 の出力を読み込み、以下のグラフを生成して results/ フォルダに保存する。
+04〜06 の出力を読み込み、以下のグラフを生成して 05_results/ フォルダに保存する。
+既定は保存のみ（画面には表示しない）。画面にも表示するときは --show を付ける。
 
 【グラフ一覧】
   1. 年度別合算精度（実測 vs 予測）      ← 04 の 04out_yearly_result.csv
@@ -11,13 +12,14 @@
   3. 予測税額の年齢区分別内訳（棒グラフ）← 05 の 05out_prediction_YYYY.csv
   4. 最終予測サマリー（補正前後の比較）  ← 05/06 の summary CSV
   5. 評価指標ダッシュボード（テーブル + 年度別誤差率）← 04 の val/yearly CSV
-  6. 信頼区間分布（幅のヒストグラム + 年齢区分別箱ひげ図）← 05 の 05out_prediction_YYYY.csv
+  6. 税収時系列グラフ（実績の推移＋予測年の見込み額）← 04 の 04out_yearly_result.csv、05/06 の summary CSV
+  7. ウォークフォワード検証レポート      ← 04 の 04out_walkforward_result.csv
 
 【使い方】
   ※ 02_src_py/ の中で実行する例。プロジェクトルートからは uv run python 02_src_py/07_visualize.py でも実行できる。
-  uv run python 07_visualize.py
+  uv run python 07_visualize.py              # 保存のみ（画面には表示しない）
   uv run python 07_visualize.py --year 2026
-  uv run python 07_visualize.py --no-show   # 画面表示せず保存のみ
+  uv run python 07_visualize.py --show       # 保存に加えて画面にも表示する
 """
 
 import argparse
@@ -613,11 +615,12 @@ def fig7_walkforward_report(yearly_df: pd.DataFrame, val_df: pd.DataFrame | None
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--year", type=int, default=PREDICT_YEAR)
-    parser.add_argument("--no-show", action="store_true", help="画面表示をスキップ")
+    parser.add_argument("--show", action="store_true",
+                        help="保存に加えて画面にも表示する（既定は保存のみ）")
     args = parser.parse_args()
 
     os.makedirs(RESULTS_DIR, exist_ok=True)
-    show = not args.no_show
+    show = args.show
     print(f"=== 07: グラフ生成（{args.year}年度） ===\n")
 
     yearly_df = None
