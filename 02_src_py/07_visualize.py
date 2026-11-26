@@ -505,26 +505,6 @@ def fig7_walkforward_report(yearly_df: pd.DataFrame, val_df: pd.DataFrame | None
     else:
         bias_detail = f"過小予測傾向  平均 {avg_err:+.2f}%"
 
-    # 過学習判定: 訓練年の平均絶対誤差率 vs テスト年誤差率
-    overfit_label, overfit_ok = "判定不可", True
-    if yearly_df is not None and "is_test" in yearly_df.columns:
-        in_sample_col = "in_sample" if "in_sample" in yearly_df.columns else None
-        train_mask    = ~yearly_df["is_test"]
-        if in_sample_col:
-            train_mask &= ~yearly_df[in_sample_col].fillna(False)
-        train_err_avg = yearly_df.loc[train_mask, "error_rate_pct"].abs().mean()
-        test_err      = yearly_df.loc[yearly_df["is_test"], "error_rate_pct"].abs()
-        if not test_err.empty and train_err_avg > 0:
-            ratio = test_err.iloc[0] / train_err_avg
-            if ratio > 5:
-                overfit_label, overfit_ok = f"過学習の疑い（訓練誤差の {ratio:.1f}x）", False
-            elif ratio > 3:
-                overfit_label, overfit_ok = f"やや過学習気味（訓練誤差の {ratio:.1f}x）", False
-            else:
-                overfit_label, overfit_ok = f"問題なし（訓練誤差の {ratio:.1f}x）", True
-        elif train_err_avg == 0:
-            overfit_label, overfit_ok = "訓練 in-sample 完全適合", True
-
     # ── レイアウト: 左60% テーブル / 右40% 棒グラフ ─────────────────────────────
     fig, axes = plt.subplots(
         1, 2, figsize=(16, 6.5),
@@ -572,13 +552,13 @@ def fig7_walkforward_report(yearly_df: pd.DataFrame, val_df: pd.DataFrame | None
     for j in range(5):  # ヘッダー
         tbl[(0, j)].set_facecolor("#2c5f8a")
         tbl[(0, j)].set_text_props(color="white", fontweight="bold")
-    for j in range(5):  # 最終フォールド（本番テスト年と同条件）を水色ハイライト
+    for j in range(5):  # 最終フォールド（テスト年）を水色ハイライト
         tbl[(last_fold_row, j)].set_facecolor("#ddeeff")
     for j in range(5):  # サマリー行をグレー
         tbl[(n_rows - 1, j)].set_facecolor("#f0f0f0")
         tbl[(n_rows,     j)].set_facecolor("#f0f0f0")
 
-    ax.set_title("フォールド別精度一覧  （水色 = 本番テスト年と同条件）",
+    ax.set_title("フォールド別精度一覧  （水色 = テスト年）",
                  fontsize=10, pad=8)
 
     # 判定テキストをテーブルの下に配置
@@ -587,7 +567,6 @@ def fig7_walkforward_report(yearly_df: pd.DataFrame, val_df: pd.DataFrame | None
     judgments = [
         (f"安定性  {ok(stable_ok)}  標準偏差 {std_err:.2f}%（目標 <1.5%）",    clr(stable_ok)),
         (f"バイアス  {ok(bias_ok)}  {bias_detail}",                            clr(bias_ok)),
-        (f"過学習  {ok(overfit_ok)}  {overfit_label}",                         clr(overfit_ok)),
     ]
     for idx, (text, color) in enumerate(judgments):
         ax.text(

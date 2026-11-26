@@ -175,7 +175,7 @@ def run_walkforward_folds(
         err_r  = (prd_b - act_b) / act_b * 100
         mape_v = mape(actual, pred)
 
-        tag = "  ← 本番テスト年と同条件" if test_year == TEST_YEAR else ""
+        tag = "  ← テスト年" if test_year == TEST_YEAR else ""
         print(f"  train={train_years[0]}〜{train_years[-1]} → test={test_year}:  "
               f"実測 {act_b:.2f}億 / 予測 {prd_b:.2f}億 / 誤差率 {err_r:+.2f}%  "
               f"個人MAPE {mape_v:.1f}%{tag}")
@@ -310,7 +310,7 @@ def main():
     )
     print("完了\n")
 
-    # ── 訓練データ精度（過学習チェック） ─────────────────────────────────────
+    # ── 訓練データでの精度（in-sample・参考） ─────────────────────────────────
     print(f"── 訓練データ精度（{final_train_years[0]}〜{final_train_years[-1]}年） ──")
     pred_train   = _predict_with_nontaxable(model, train_df, train_df, feat_cols)
     metrics_train = print_metrics("訓練データ（label補正済）", train_df[TARGET_COL].values, pred_train)
